@@ -33,17 +33,25 @@ app.use('*', async (c, next) => {
   const token = authHeader.split(' ')[1]
 
   try {
-    const oktaDomain = c.env.OKTA_DOMAIN || 'https://dev-00000000.okta.com';
+    const oktaDomain = c.env.OKTA_DOMAIN;
+    if (!oktaDomain) {
+      console.error('OKTA_DOMAIN environment variable is missing.');
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+    const normalizedOktaDomain = oktaDomain.replace(/\/$/, '');
+
+    const audience = c.env.OKTA_CLIENT_ID || 'api://default';
 
     // Initialize or re-initialize if domain changes
-    if (!cachedJWKS || lastOktaDomain !== oktaDomain) {
-      const jwksUri = new URL(`${oktaDomain}/oauth2/default/v1/keys`);
+    if (!cachedJWKS || lastOktaDomain !== normalizedOktaDomain) {
+      const jwksUri = new URL(`${normalizedOktaDomain}/oauth2/default/v1/keys`);
       cachedJWKS = createRemoteJWKSet(jwksUri);
-      lastOktaDomain = oktaDomain;
+      lastOktaDomain = normalizedOktaDomain;
     }
 
     const { payload } = await jwtVerify(token, cachedJWKS, {
-      issuer: `${oktaDomain}/oauth2/default`,
+      issuer: `${normalizedOktaDomain}/oauth2/default`,
+      audience: audience,
     });
 
     if (payload.sub) {
@@ -59,123 +67,255 @@ app.use('*', async (c, next) => {
   }
 })
 
+const getAnthropicHeaders = (c: any) => ({
+  'Content-Type': 'application/json',
+  'anthropic-version': '2023-06-01',
+  'anthropic-beta': 'managed-agents-2026-04-01',
+  'X-Api-Key': c.env.ANTHROPIC_API_KEY || 'dummy',
+  'x-okta-user-id': c.get('user')?.id
+})
+
+const fetchAnthropic = async (c: any, endpoint: string, options: RequestInit = {}) => {
+  try {
+    const response = await fetch(`https://api.anthropic.com/v1${endpoint}`, {
+      ...options,
+      headers: {
+        ...getAnthropicHeaders(c),
+        ...options.headers,
+      }
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({})) as any;
+      return c.json({ error: errorData.error?.message || `Anthropic API Error: ${response.status} ${response.statusText}` }, response.status as any);
+    }
+
+    // For DELETE operations, response might be empty or specific JSON
+    const data = await response.json().catch(() => ({}));
+    return c.json(data);
+  } catch (error: any) {
+    return c.json({ error: error.message }, 500);
+  }
+}
 app.get('/', (c) => {
   return c.text('Multiplayer Managed Agents Platform API')
 })
 
-// Anthropic Managed Agents API Endpoints
+// ----- Agents Endpoints -----
 app.post('/agents', async (c) => {
-  const user = c.get('user')
-  const body = await c.req.json()
-
   try {
-    const anthropic = new Anthropic({ apiKey: c.env.ANTHROPIC_API_KEY })
-    const agent = await anthropic.beta.agents.create({
-      model: body.model || 'claude-3-5-sonnet-20241022',
-      name: body.name || 'New Agent',
-      description: body.description || '',
-      mcp_servers: body.mcp_servers || [],
-      // Use metadata or a similar field if Anthropic API supports it; passing as description part since tagging wasn't standard,
-      // but if we are passing metadata okta_user_id, wait. The type is: `mcp_servers`, `description`, `name`, `model`.
-      // Let's pass it by modifying the request headers if needed, or if Anthropic SDK supports headers:
-    }, {
-      headers: {
-        'x-okta-user-id': user.id // Tagging the resource with okta_user_id via headers as standard SDK pattern
-      }
-    });
-    return c.json(agent)
-  } catch (error) {
-    console.error('Agent creation failed:', error)
-    return c.json({ error: 'Agent creation failed' }, 500)
+    const body = await c.req.json().catch(() => ({}))
+    return fetchAnthropic(c, '/agents', { method: 'POST', body: JSON.stringify(body) })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
   }
 })
 
 app.get('/agents', async (c) => {
-  const user = c.get('user')
+  return fetchAnthropic(c, '/agents')
+})
 
+app.get('/agents/:agent_id', async (c) => {
+  return fetchAnthropic(c, `/agents/${c.req.param('agent_id')}`)
+})
+
+app.post('/agents/:agent_id', async (c) => {
   try {
-    const anthropic = new Anthropic({ apiKey: c.env.ANTHROPIC_API_KEY })
-    // The beta.agents SDK exposes a .list() method.
-    const agents = await anthropic.beta.agents.list({}, {
-      headers: {
-        'x-okta-user-id': user.id
-      }
-    })
-    return c.json(agents)
-  } catch (error) {
-    console.error('Agent list failed:', error)
-    return c.json({ error: 'Agent list failed' }, 500)
+    const body = await c.req.json().catch(() => ({}))
+    return fetchAnthropic(c, `/agents/${c.req.param('agent_id')}`, { method: 'POST', body: JSON.stringify(body) })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
   }
 })
 
-app.put('/agents/:id', async (c) => {
-  const user = c.get('user')
-  const id = c.req.param('id')
-  const body = await c.req.json()
-
-  try {
-    const anthropic = new Anthropic({ apiKey: c.env.ANTHROPIC_API_KEY })
-    const agent = await anthropic.beta.agents.update(id, {
-      model: body.model,
-      name: body.name,
-      description: body.description,
-      mcp_servers: body.mcp_servers,
-      version: body.version,
-    }, {
-      headers: {
-        'x-okta-user-id': user.id
-      }
-    })
-    return c.json(agent)
-  } catch (error) {
-    console.error('Agent update failed:', error)
-    return c.json({ error: 'Agent update failed' }, 500)
-  }
+app.post('/agents/:agent_id/archive', async (c) => {
+  return fetchAnthropic(c, `/agents/${c.req.param('agent_id')}/archive`, { method: 'POST' })
 })
 
+app.get('/agents/:agent_id/versions', async (c) => {
+  return fetchAnthropic(c, `/agents/${c.req.param('agent_id')}/versions`)
+})
+
+// ----- Sessions Endpoints -----
 app.post('/sessions', async (c) => {
-  // Placeholder for creating a session
-  return c.json({ message: 'Session created', session_id: 'sess_123' })
+  try {
+    const body = await c.req.json().catch(() => ({}))
+    return fetchAnthropic(c, '/sessions', { method: 'POST', body: JSON.stringify(body) })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  }
 })
 
-app.post('/runs', async (c) => {
-  // Placeholder for creating a run
-  return c.json({ message: 'Run started', run_id: 'run_123' })
+app.get('/sessions', async (c) => {
+  return fetchAnthropic(c, '/sessions')
 })
 
-// SSE Streaming for Run Responses
-app.get('/runs/:id/stream', (c) => {
-  const id = c.req.param('id')
+app.get('/sessions/:session_id', async (c) => {
+  return fetchAnthropic(c, `/sessions/${c.req.param('session_id')}`)
+})
 
+app.post('/sessions/:session_id', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}))
+    return fetchAnthropic(c, `/sessions/${c.req.param('session_id')}`, { method: 'POST', body: JSON.stringify(body) })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  }
+})
+
+app.delete('/sessions/:session_id', async (c) => {
+  return fetchAnthropic(c, `/sessions/${c.req.param('session_id')}`, { method: 'DELETE' })
+})
+
+app.post('/sessions/:session_id/archive', async (c) => {
+  return fetchAnthropic(c, `/sessions/${c.req.param('session_id')}/archive`, { method: 'POST' })
+})
+
+// ----- Session Events Endpoints -----
+app.get('/sessions/:session_id/events', async (c) => {
+  return fetchAnthropic(c, `/sessions/${c.req.param('session_id')}/events`)
+})
+
+app.post('/sessions/:session_id/events', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}))
+    return fetchAnthropic(c, `/sessions/${c.req.param('session_id')}/events`, { method: 'POST', body: JSON.stringify(body) })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  }
+})
+
+app.get('/sessions/:session_id/events/stream', async (c) => {
   return streamSSE(c, async (stream) => {
-    // Placeholder for Anthropic API SSE streaming
-    // e.g. using @anthropic-ai/sdk's streaming capabilities
-    await stream.writeSSE({
-      data: JSON.stringify({ status: 'running', run_id: id }),
-      event: 'update',
-      id: String(Date.now()),
-    })
+    try {
+      const response = await fetch(`https://api.anthropic.com/v1/sessions/${c.req.param('session_id')}/events/stream`, {
+        headers: getAnthropicHeaders(c)
+      })
 
-    // Simulate work
-    await new Promise((resolve) => setTimeout(resolve, 1000))
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({})) as any;
+        await stream.writeSSE({
+          data: JSON.stringify({ error: errorData.error?.message || `Error: ${response.status}` }),
+          event: 'error'
+        })
+        return;
+      }
 
-    await stream.writeSSE({
-      data: JSON.stringify({ status: 'completed', run_id: id }),
-      event: 'complete',
-      id: String(Date.now()),
-    })
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("No response body");
+
+      const decoder = new TextDecoder('utf-8');
+      let buffer = '';
+
+let currentEvent = 'message';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            currentEvent = line.slice(7).trim();
+          } else if (line.startsWith('data: ')) {
+            const dataStr = line.slice(6);
+            if (dataStr === '[DONE]') continue;
+            try {
+              // Write raw stream data directly to our client
+              await stream.writeSSE({
+                data: dataStr,
+                event: currentEvent,
+                id: String(Date.now())
+              });
+            } catch (e) {
+              // ignore parse errors for partial chunks
+            }
+          }
+        }
+      }
+    } catch (err: any) {
+      await stream.writeSSE({
+        data: JSON.stringify({ error: err.message }),
+        event: 'error',
+      })
+    }
   })
 })
 
-// Export Durable Object class
+// ----- Session Resources Endpoints -----
+app.post('/sessions/:session_id/resources', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}))
+    return fetchAnthropic(c, `/sessions/${c.req.param('session_id')}/resources`, { method: 'POST', body: JSON.stringify(body) })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  }
+})
+
+app.get('/sessions/:session_id/resources', async (c) => {
+  return fetchAnthropic(c, `/sessions/${c.req.param('session_id')}/resources`)
+})
+
+app.get('/sessions/:session_id/resources/:resource_id', async (c) => {
+  return fetchAnthropic(c, `/sessions/${c.req.param('session_id')}/resources/${c.req.param('resource_id')}`)
+})
+
+app.post('/sessions/:session_id/resources/:resource_id', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}))
+    return fetchAnthropic(c, `/sessions/${c.req.param('session_id')}/resources/${c.req.param('resource_id')}`, { method: 'POST', body: JSON.stringify(body) })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  }
+})
+
+app.delete('/sessions/:session_id/resources/:resource_id', async (c) => {
+  return fetchAnthropic(c, `/sessions/${c.req.param('session_id')}/resources/${c.req.param('resource_id')}`, { method: 'DELETE' })
+})
+
+// ----- Environments Endpoints -----
+app.post('/environments', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}))
+    return fetchAnthropic(c, '/environments', { method: 'POST', body: JSON.stringify(body) })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  }
+})
+
+app.get('/environments', async (c) => {
+  return fetchAnthropic(c, '/environments')
+})
+
+app.get('/environments/:environment_id', async (c) => {
+  return fetchAnthropic(c, `/environments/${c.req.param('environment_id')}`)
+})
+
+app.post('/environments/:environment_id', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}))
+    return fetchAnthropic(c, `/environments/${c.req.param('environment_id')}`, { method: 'POST', body: JSON.stringify(body) })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  }
+})
+
+app.delete('/environments/:environment_id', async (c) => {
+  return fetchAnthropic(c, `/environments/${c.req.param('environment_id')}`, { method: 'DELETE' })
+})
+
+app.post('/environments/:environment_id/archive', async (c) => {
+  return fetchAnthropic(c, `/environments/${c.req.param('environment_id')}/archive`, { method: 'POST' })
+})
+
+
 export { RealtimeStateObject }
 
-// Export default app and Cron handler
 export default {
   fetch: app.fetch,
   async scheduled(event: ScheduledEvent, env: Bindings, ctx: ExecutionContext) {
-    // Background Tasks: Cloudflare Cron Triggers (for the scheduling feature)
     console.log('Cron trigger executed at', event.cron)
-    // Implement scheduled config checks and agent invocations here
   }
 }

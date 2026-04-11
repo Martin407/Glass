@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Routes, Route, Link, Outlet } from 'react-router-dom';
 import { LoginCallback, useOktaAuth } from '@okta/okta-react';
 import { toRelativeUrl } from '@okta/okta-auth-js';
@@ -9,20 +9,26 @@ import Login from './pages/Login';
 import MockAgentBuilder from './pages/MockAgentBuilder';
 import './App.css';
 
+import { setAccessTokenProvider } from './lib/agentsApi';
+
 const RequiredAuth = () => {
   const { oktaAuth, authState } = useOktaAuth();
+  const [redirecting, setRedirecting] = useState(false);
 
   useEffect(() => {
     if (!authState) {
       return;
     }
 
-    if (!authState?.isAuthenticated) {
+    if (!authState?.isAuthenticated && !redirecting) {
+      setRedirecting(true);
       const originalUri = toRelativeUrl(window.location.href, window.location.origin);
       oktaAuth.setOriginalUri(originalUri);
       oktaAuth.signInWithRedirect();
+    } else if (authState?.isAuthenticated) {
+      setAccessTokenProvider(() => authState.accessToken?.accessToken);
     }
-  }, [oktaAuth, authState, authState?.isAuthenticated]);
+  }, [oktaAuth, authState, authState?.isAuthenticated, redirecting]);
 
   if (!authState || !authState?.isAuthenticated) {
     return <div>Loading...</div>;

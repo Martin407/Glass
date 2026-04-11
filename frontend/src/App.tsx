@@ -6,6 +6,7 @@ import Dashboard from './pages/Dashboard';
 import AgentBuilder from './pages/AgentBuilder';
 import SessionView from './pages/SessionView';
 import Login from './pages/Login';
+import MockAgentBuilder from './pages/MockAgentBuilder';
 import './App.css';
 
 const RequiredAuth = () => {
@@ -49,6 +50,7 @@ function App() {
             <Route path="/session/:id" element={<SessionView />} />
           </Route>
 
+          <Route path="/mockbuilder" element={<MockAgentBuilder />} />
           <Route path="/login" element={<Login />} />
           <Route path="/login/callback" element={<LoginCallback />} />
         </Routes>

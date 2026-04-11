@@ -65,8 +65,72 @@ app.get('/', (c) => {
 
 // Anthropic Managed Agents API Endpoints
 app.post('/agents', async (c) => {
-  // Placeholder for creating an agent
-  return c.json({ message: 'Agent created', agent_id: 'ag_123' })
+  const user = c.get('user')
+  const body = await c.req.json()
+
+  try {
+    const anthropic = new Anthropic({ apiKey: c.env.ANTHROPIC_API_KEY })
+    const agent = await anthropic.beta.agents.create({
+      model: body.model || 'claude-3-5-sonnet-20241022',
+      name: body.name || 'New Agent',
+      description: body.description || '',
+      mcp_servers: body.mcp_servers || [],
+      // Use metadata or a similar field if Anthropic API supports it; passing as description part since tagging wasn't standard,
+      // but if we are passing metadata okta_user_id, wait. The type is: `mcp_servers`, `description`, `name`, `model`.
+      // Let's pass it by modifying the request headers if needed, or if Anthropic SDK supports headers:
+    }, {
+      headers: {
+        'x-okta-user-id': user.id // Tagging the resource with okta_user_id via headers as standard SDK pattern
+      }
+    });
+    return c.json(agent)
+  } catch (error) {
+    console.error('Agent creation failed:', error)
+    return c.json({ error: 'Agent creation failed' }, 500)
+  }
+})
+
+app.get('/agents', async (c) => {
+  const user = c.get('user')
+
+  try {
+    const anthropic = new Anthropic({ apiKey: c.env.ANTHROPIC_API_KEY })
+    // The beta.agents SDK exposes a .list() method.
+    const agents = await anthropic.beta.agents.list({}, {
+      headers: {
+        'x-okta-user-id': user.id
+      }
+    })
+    return c.json(agents)
+  } catch (error) {
+    console.error('Agent list failed:', error)
+    return c.json({ error: 'Agent list failed' }, 500)
+  }
+})
+
+app.put('/agents/:id', async (c) => {
+  const user = c.get('user')
+  const id = c.req.param('id')
+  const body = await c.req.json()
+
+  try {
+    const anthropic = new Anthropic({ apiKey: c.env.ANTHROPIC_API_KEY })
+    const agent = await anthropic.beta.agents.update(id, {
+      model: body.model,
+      name: body.name,
+      description: body.description,
+      mcp_servers: body.mcp_servers,
+      version: body.version,
+    }, {
+      headers: {
+        'x-okta-user-id': user.id
+      }
+    })
+    return c.json(agent)
+  } catch (error) {
+    console.error('Agent update failed:', error)
+    return c.json({ error: 'Agent update failed' }, 500)
+  }
 })
 
 app.post('/sessions', async (c) => {

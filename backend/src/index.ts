@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import Anthropic from '@anthropic-ai/sdk'
+import { createRemoteJWKSet, jwtVerify } from 'jose'
 import { RealtimeStateObject } from './durable-object'
 
 type Bindings = {
@@ -18,17 +19,44 @@ type Variables = {
 
 const app = new Hono<{ Bindings: Bindings; Variables: Variables }>()
 
-// Auth Middleware (Placeholder)
+let cachedJWKS: ReturnType<typeof createRemoteJWKSet> | null = null;
+let lastOktaDomain: string | null = null;
+
+// Auth Middleware
 app.use('*', async (c, next) => {
-  // Placeholder: Implement Okta SSO (SAML/OIDC) validation here
-  // Support SCIM or add new users on first authentication
   const authHeader = c.req.header('Authorization')
-  if (!authHeader) {
-    // For development, we might bypass this or use a mock user
-    // return c.json({ error: 'Unauthorized' }, 401)
+
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return c.json({ error: 'Unauthorized' }, 401)
   }
-  c.set('user', { id: 'user-123' }) // Mock user
-  await next()
+
+  const token = authHeader.split(' ')[1]
+
+  try {
+    const oktaDomain = c.env.OKTA_DOMAIN || 'https://dev-00000000.okta.com';
+
+    // Initialize or re-initialize if domain changes
+    if (!cachedJWKS || lastOktaDomain !== oktaDomain) {
+      const jwksUri = new URL(`${oktaDomain}/oauth2/default/v1/keys`);
+      cachedJWKS = createRemoteJWKSet(jwksUri);
+      lastOktaDomain = oktaDomain;
+    }
+
+    const { payload } = await jwtVerify(token, cachedJWKS, {
+      issuer: `${oktaDomain}/oauth2/default`,
+    });
+
+    if (payload.sub) {
+      c.set('user', { id: payload.sub });
+    } else {
+      return c.json({ error: 'Unauthorized - Invalid Token Payload' }, 401)
+    }
+
+    await next()
+  } catch (error) {
+    console.error('JWT verification failed:', error);
+    return c.json({ error: 'Unauthorized' }, 401)
+  }
 })
 
 app.get('/', (c) => {

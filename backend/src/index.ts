@@ -347,7 +347,7 @@ app.post('/sessions', async (c) => {
         if (isConstraintError(err)) {
           return c.json({ error: 'Failed to store session mapping due to a session ID conflict.' }, 409)
         }
-        return c.json({ error: 'Failed to store local session ownership after creating session.' }, 500)
+        return c.json({ error: 'Failed to store local session ownership after creating session' }, 500)
       }
     }
 

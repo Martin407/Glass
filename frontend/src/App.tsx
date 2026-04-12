@@ -1,3 +1,5 @@
+import { useState, useEffect } from 'react';
+import { agentsApi } from './lib/agentsApi';
 import {
   Search,
   Grid,
@@ -37,41 +39,75 @@ const apps = [
   { name: 'Google Workspace', icon: Inbox, connected: false, color: 'text-blue-500' },
 ];
 
-const readOnlyTools = [
-  { name: 'Schedule message', status: 'Allow' },
-  { name: 'Search publics', status: 'Allow' },
-  { name: 'Search public and privates', status: 'Allow' },
-  { name: 'Search channels', status: 'Allow' },
-  { name: 'Search users', status: 'Allow' },
-  { name: 'Read channels', status: 'Allow' },
-  { name: 'Read threads', status: 'Allow' },
-  { name: 'Read canvas', status: 'Allow' },
-  { name: 'Read user profiles', status: 'Allow' },
-];
 
-const writeDeleteTools = [
-  { name: 'Send message', status: 'Ask' },
-  { name: 'Create canvas', status: 'Allow' },
-  { name: 'Update canvas', status: 'Ask' },
-];
 
-const PermissionToggle = ({ status }: { status: string }) => {
+
+
+const PermissionToggle = ({ status, onToggle }: { status: string, onToggle: (newStatus: string) => void }) => {
   return (
     <div className="flex bg-gray-100 rounded-lg p-0.5 text-xs font-medium">
-      <button className={`px-3 py-1 rounded-md transition-colors ${status === 'Auto' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}>
+      <button
+        onClick={() => onToggle('Auto')}
+        className={`px-3 py-1 rounded-md transition-colors ${status === 'Auto' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}>
         Auto
       </button>
-      <button className={`px-3 py-1 rounded-md transition-colors ${status === 'Allow' ? 'bg-green-100 text-green-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+      <button
+        onClick={() => onToggle('Allow')}
+        className={`px-3 py-1 rounded-md transition-colors ${status === 'Allow' ? 'bg-green-100 text-green-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
         Allow
       </button>
-      <button className={`px-3 py-1 rounded-md transition-colors ${status === 'Ask' ? 'bg-orange-100 text-orange-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+      <button
+        onClick={() => onToggle('Ask')}
+        className={`px-3 py-1 rounded-md transition-colors ${status === 'Ask' ? 'bg-orange-100 text-orange-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
         Ask
+      </button>
+      <button
+        onClick={() => onToggle('Deny')}
+        className={`px-3 py-1 rounded-md transition-colors ${status === 'Deny' ? 'bg-red-100 text-red-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+        Deny
       </button>
     </div>
   );
 };
 
 function App() {
+  const [appState, setAppState] = useState(apps);
+  const [selectedProvider, setSelectedProvider] = useState('Slack');
+  const [readOnlyTools, setReadOnlyTools] = useState<any[]>([]);
+  const [writeDeleteTools, setWriteDeleteTools] = useState<any[]>([]);
+
+  useEffect(() => {
+    agentsApi.getMcpConnections().then((res: any) => {
+      if (res.connections) {
+        setAppState(prev => prev.map(app => ({
+          ...app,
+          connected: res.connections.includes(app.name)
+        })));
+      }
+    }).catch(console.error);
+  }, []);
+
+  useEffect(() => {
+    setReadOnlyTools([]);
+    setWriteDeleteTools([]);
+    agentsApi.getMcpTools(selectedProvider).then((res: any) => {
+      setReadOnlyTools(res.read_only || []);
+      setWriteDeleteTools(res.write_delete || []);
+    }).catch(console.error);
+  }, [selectedProvider]);
+
+  const handleToggle = (toolName: string, newStatus: string, type: 'read_only' | 'write_delete') => {
+    agentsApi.updateMcpToolPermission(selectedProvider, toolName, newStatus).then(() => {
+      if (type === 'read_only') {
+        setReadOnlyTools(prev => prev.map(t => t.name === toolName ? { ...t, status: newStatus } : t));
+      } else {
+        setWriteDeleteTools(prev => prev.map(t => t.name === toolName ? { ...t, status: newStatus } : t));
+      }
+    }).catch(console.error);
+  };
+
+  const selectedApp = appState.find(a => a.name === selectedProvider) || appState[0];
+
   return (
     <div className="flex h-screen bg-white text-gray-900 font-sans">
       {/* Primary Sidebar */}
@@ -115,14 +151,15 @@ function App() {
             </div>
 
             <div className="space-y-1">
-              {apps.map((app, index) => (
+              {appState.map((app, index) => (
                 <button
                   key={index}
-                  className={`w-full flex items-center justify-between px-2 py-2 rounded-md text-sm ${app.name === 'Slack' ? 'bg-blue-50 text-blue-700' : 'text-gray-700 hover:bg-gray-100'}`}
+                  onClick={() => setSelectedProvider(app.name)}
+                  className={`w-full flex items-center justify-between px-2 py-2 rounded-md text-sm ${app.name === selectedProvider ? 'bg-blue-50 text-blue-700' : 'text-gray-700 hover:bg-gray-100'}`}
                 >
                   <div className="flex items-center gap-3">
-                    <app.icon size={16} className={`${app.name === 'Slack' ? '' : app.color}`} />
-                    <span className={app.name === 'Slack' ? 'font-medium' : ''}>{app.name}</span>
+                    <app.icon size={16} className={`${app.name === selectedProvider ? '' : app.color}`} />
+                    <span className={app.name === selectedProvider ? 'font-medium' : ''}>{app.name}</span>
                   </div>
                   {app.connected && (
                     <div className="w-2 h-2 rounded-full bg-green-500"></div>
@@ -141,7 +178,7 @@ function App() {
           <div className="flex items-center gap-4">
              <div className="flex items-center gap-2 text-sm text-gray-600">
                 <MessageSquare size={16} className="text-blue-500" />
-                <span>Slack</span>
+                <span>{selectedProvider}</span>
                 <Plus size={16} className="text-gray-400 ml-1" />
              </div>
           </div>
@@ -160,11 +197,13 @@ function App() {
             <div>
               <div className="flex items-center gap-3 mb-2">
                 <MessageSquare size={28} className="text-blue-500" />
-                <h1 className="text-2xl font-semibold">Slack</h1>
-                <div className="flex items-center gap-1 px-2 py-1 bg-green-50 text-green-700 rounded-full text-xs font-medium border border-green-200 ml-2">
-                  <div className="w-1.5 h-1.5 rounded-full bg-green-500"></div>
-                  Connected
-                </div>
+                <h1 className="text-2xl font-semibold">{selectedProvider}</h1>
+                {selectedApp.connected && (
+                  <div className="flex items-center gap-1 px-2 py-1 bg-green-50 text-green-700 rounded-full text-xs font-medium border border-green-200 ml-2">
+                    <div className="w-1.5 h-1.5 rounded-full bg-green-500"></div>
+                    Connected
+                  </div>
+                )}
               </div>
               <p className="text-gray-500 text-sm max-w-2xl mt-4">
                 Search messages, access channels, read threads, and stay connected with your team's
@@ -195,7 +234,7 @@ function App() {
                 {readOnlyTools.map((tool, index) => (
                   <div key={index} className="flex items-center justify-between py-3 border-b border-gray-100 last:border-0">
                     <span className="text-sm text-gray-700">{tool.name}</span>
-                    <PermissionToggle status={tool.status} />
+                    <PermissionToggle status={tool.status} onToggle={(newStatus) => handleToggle(tool.name, newStatus, 'read_only')} />
                   </div>
                 ))}
               </div>
@@ -216,7 +255,7 @@ function App() {
                 {writeDeleteTools.map((tool, index) => (
                   <div key={index} className="flex items-center justify-between py-3 border-b border-gray-100 last:border-0">
                     <span className="text-sm text-gray-700">{tool.name}</span>
-                    <PermissionToggle status={tool.status} />
+                    <PermissionToggle status={tool.status} onToggle={(newStatus) => handleToggle(tool.name, newStatus, 'write_delete')} />
                   </div>
                 ))}
               </div>

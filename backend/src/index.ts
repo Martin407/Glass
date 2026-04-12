@@ -265,6 +265,59 @@ app.post('/environments/:environment_id/archive', async (c) => {
 })
 
 
+
+// ----- MCP Connections & Tools Endpoints -----
+app.get('/mcp/connections', async (c) => {
+  try {
+    const user = c.get('user');
+    const { results } = await c.env.DB.prepare('SELECT DISTINCT provider FROM oauth_tokens WHERE user_id = ?').bind(user.id).all();
+    return c.json({ connections: results.map(r => r.provider) });
+  } catch (error: any) {
+    return c.json({ error: error.message }, 500);
+  }
+});
+
+app.get('/mcp/tools/:provider', async (c) => {
+  try {
+    const provider = c.req.param('provider');
+    const { results } = await c.env.DB.prepare('SELECT tool_name, type, permission FROM global_tool_permissions WHERE provider = ?').bind(provider).all();
+
+    // Group tools by type
+    const tools = results.reduce((acc: any, tool: any) => {
+      acc[tool.type] = acc[tool.type] || [];
+      acc[tool.type].push({ name: tool.tool_name, status: tool.permission.charAt(0).toUpperCase() + tool.permission.slice(1) });
+      return acc;
+    }, { read_only: [], write_delete: [] });
+
+    return c.json(tools);
+  } catch (error: any) {
+    return c.json({ error: error.message }, 500);
+  }
+});
+
+app.post('/mcp/tools/:provider/:tool_name', async (c) => {
+  try {
+    const provider = c.req.param('provider');
+    const tool_name = decodeURIComponent(c.req.param('tool_name'));
+    const body = await c.req.json().catch(() => ({}));
+    const permission = body.permission?.toLowerCase();
+
+    // Simple validation
+    if (!permission || !['allow', 'ask', 'deny', 'auto'].includes(permission)) {
+      return c.json({ error: 'Invalid permission' }, 400);
+    }
+
+    await c.env.DB.prepare('UPDATE global_tool_permissions SET permission = ?, updated_at = CURRENT_TIMESTAMP WHERE provider = ? AND tool_name = ?')
+      .bind(permission, provider, tool_name)
+      .run();
+
+    return c.json({ success: true });
+  } catch (error: any) {
+    return c.json({ error: error.message }, 500);
+  }
+});
+
+
 export { RealtimeStateObject }
 
 export default {

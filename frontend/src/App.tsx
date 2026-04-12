@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { agentsApi } from './lib/agentsApi';
+import { ChatWindow } from './components/ChatWindow';
 import {
   Search,
   Grid,
@@ -75,6 +76,33 @@ function App() {
   const [selectedProvider, setSelectedProvider] = useState('Slack');
   const [readOnlyTools, setReadOnlyTools] = useState<any[]>([]);
   const [writeDeleteTools, setWriteDeleteTools] = useState<any[]>([]);
+  const [activeSessions, setActiveSessions] = useState<{ id: string, x: number, y: number }[]>([]);
+  const [agents, setAgents] = useState<any[]>([]);
+
+  useEffect(() => {
+    agentsApi.listAgents().then((res: any) => {
+      if (res.data) setAgents(res.data);
+    }).catch(console.error);
+  }, []);
+
+  const handleCreateSession = async () => {
+    if (agents.length === 0) return;
+    try {
+      const res = await agentsApi.createSession({ agent: agents[0].id });
+      if (res.id) {
+        setActiveSessions(prev => [
+          ...prev,
+          { id: res.id, x: 100 + (prev.length * 30), y: 100 + (prev.length * 30) }
+        ]);
+      }
+    } catch (err) {
+      console.error('Failed to create session:', err);
+    }
+  };
+
+  const handleCloseSession = (id: string) => {
+    setActiveSessions(prev => prev.filter(s => s.id !== id));
+  };
 
   useEffect(() => {
     agentsApi.getMcpConnections().then((res: any) => {
@@ -183,6 +211,13 @@ function App() {
              </div>
           </div>
           <div className="flex items-center gap-4">
+            <button
+              onClick={handleCreateSession}
+              disabled={agents.length === 0}
+              className={`text-sm font-medium text-white px-3 py-1.5 rounded-md flex items-center gap-1 shadow-sm transition-colors ${agents.length === 0 ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-500 hover:bg-blue-600'}`}
+            >
+              <Plus size={16} /> New Session
+            </button>
             <span className="text-sm font-medium">Glass</span>
             <div className="flex gap-2">
                <button className="text-gray-400 hover:text-gray-600"><MonitorPlay size={18}/></button>
@@ -192,77 +227,90 @@ function App() {
         </header>
 
         {/* Content Area */}
-        <div className="flex-1 overflow-y-auto p-8 max-w-4xl">
-          <div className="flex items-start justify-between mb-8">
-            <div>
-              <div className="flex items-center gap-3 mb-2">
-                <MessageSquare size={28} className="text-blue-500" />
-                <h1 className="text-2xl font-semibold">{selectedProvider}</h1>
-                {selectedApp.connected && (
-                  <div className="flex items-center gap-1 px-2 py-1 bg-green-50 text-green-700 rounded-full text-xs font-medium border border-green-200 ml-2">
-                    <div className="w-1.5 h-1.5 rounded-full bg-green-500"></div>
-                    Connected
-                  </div>
-                )}
-              </div>
-              <p className="text-gray-500 text-sm max-w-2xl mt-4">
-                Search messages, access channels, read threads, and stay connected with your team's
-                communications. Find relevant discussions and context quickly.
-              </p>
-            </div>
-            <button className="text-gray-400 hover:text-gray-600">
-              <MoreVertical size={20} />
-            </button>
+        {activeSessions.length > 0 ? (
+          <div className="flex-1 flex flex-row h-full w-full overflow-x-auto">
+            {activeSessions.map((session) => (
+              <ChatWindow
+                key={session.id}
+                sessionId={session.id}
+                onClose={handleCloseSession}
+                defaultPosition={{ x: session.x, y: session.y }}
+              />
+            ))}
           </div>
+        ) : (
+          <div className="flex-1 overflow-y-auto p-8 max-w-4xl">
+            <div className="flex items-start justify-between mb-8">
+              <div>
+                <div className="flex items-center gap-3 mb-2">
+                  <MessageSquare size={28} className="text-blue-500" />
+                  <h1 className="text-2xl font-semibold">{selectedProvider}</h1>
+                  {selectedApp.connected && (
+                    <div className="flex items-center gap-1 px-2 py-1 bg-green-50 text-green-700 rounded-full text-xs font-medium border border-green-200 ml-2">
+                      <div className="w-1.5 h-1.5 rounded-full bg-green-500"></div>
+                      Connected
+                    </div>
+                  )}
+                </div>
+                <p className="text-gray-500 text-sm max-w-2xl mt-4">
+                  Search messages, access channels, read threads, and stay connected with your team's
+                  communications. Find relevant discussions and context quickly.
+                </p>
+              </div>
+              <button className="text-gray-400 hover:text-gray-600">
+                <MoreVertical size={20} />
+              </button>
+            </div>
 
-          <div className="mb-8">
-            <h2 className="text-lg font-semibold mb-1">Tool permissions</h2>
-            <p className="text-sm text-gray-500 mb-6">Choose when the agent is allowed to use these tools.</p>
-
-            {/* Read-Only Tools */}
             <div className="mb-8">
-              <div className="flex items-center justify-between text-xs font-semibold text-gray-500 mb-4 border-b border-gray-100 pb-2">
-                <div className="flex items-center tracking-wider">
-                  <ChevronDown size={14} className="mr-1" />
-                  READ-ONLY TOOLS
-                </div>
-                <div className="flex items-center gap-1 bg-gray-50 px-2 py-1 rounded border border-gray-200 text-gray-600">
-                  Allow <ChevronDown size={14} />
-                </div>
-              </div>
-              <div className="space-y-0">
-                {readOnlyTools.map((tool, index) => (
-                  <div key={index} className="flex items-center justify-between py-3 border-b border-gray-100 last:border-0">
-                    <span className="text-sm text-gray-700">{tool.name}</span>
-                    <PermissionToggle status={tool.status} onToggle={(newStatus) => handleToggle(tool.name, newStatus, 'read_only')} />
-                  </div>
-                ))}
-              </div>
-            </div>
+              <h2 className="text-lg font-semibold mb-1">Tool permissions</h2>
+              <p className="text-sm text-gray-500 mb-6">Choose when the agent is allowed to use these tools.</p>
 
-            {/* Write/Delete Tools */}
-            <div>
-              <div className="flex items-center justify-between text-xs font-semibold text-gray-500 mb-4 border-b border-gray-100 pb-2">
-                <div className="flex items-center tracking-wider">
-                  <ChevronDown size={14} className="mr-1" />
-                  WRITE/DELETE TOOLS
-                </div>
-                <div className="flex items-center gap-1 bg-gray-50 px-2 py-1 rounded border border-gray-200 text-gray-600">
-                  Mixed <ChevronDown size={14} />
-                </div>
-              </div>
-              <div className="space-y-0">
-                {writeDeleteTools.map((tool, index) => (
-                  <div key={index} className="flex items-center justify-between py-3 border-b border-gray-100 last:border-0">
-                    <span className="text-sm text-gray-700">{tool.name}</span>
-                    <PermissionToggle status={tool.status} onToggle={(newStatus) => handleToggle(tool.name, newStatus, 'write_delete')} />
+              {/* Read-Only Tools */}
+              <div className="mb-8">
+                <div className="flex items-center justify-between text-xs font-semibold text-gray-500 mb-4 border-b border-gray-100 pb-2">
+                  <div className="flex items-center tracking-wider">
+                    <ChevronDown size={14} className="mr-1" />
+                    READ-ONLY TOOLS
                   </div>
-                ))}
+                  <div className="flex items-center gap-1 bg-gray-50 px-2 py-1 rounded border border-gray-200 text-gray-600">
+                    Allow <ChevronDown size={14} />
+                  </div>
+                </div>
+                <div className="space-y-0">
+                  {readOnlyTools.map((tool, index) => (
+                    <div key={index} className="flex items-center justify-between py-3 border-b border-gray-100 last:border-0">
+                      <span className="text-sm text-gray-700">{tool.name}</span>
+                      <PermissionToggle status={tool.status} onToggle={(newStatus) => handleToggle(tool.name, newStatus, 'read_only')} />
+                    </div>
+                  ))}
+                </div>
               </div>
-            </div>
 
+              {/* Write/Delete Tools */}
+              <div>
+                <div className="flex items-center justify-between text-xs font-semibold text-gray-500 mb-4 border-b border-gray-100 pb-2">
+                  <div className="flex items-center tracking-wider">
+                    <ChevronDown size={14} className="mr-1" />
+                    WRITE/DELETE TOOLS
+                  </div>
+                  <div className="flex items-center gap-1 bg-gray-50 px-2 py-1 rounded border border-gray-200 text-gray-600">
+                    Mixed <ChevronDown size={14} />
+                  </div>
+                </div>
+                <div className="space-y-0">
+                  {writeDeleteTools.map((tool, index) => (
+                    <div key={index} className="flex items-center justify-between py-3 border-b border-gray-100 last:border-0">
+                      <span className="text-sm text-gray-700">{tool.name}</span>
+                      <PermissionToggle status={tool.status} onToggle={(newStatus) => handleToggle(tool.name, newStatus, 'write_delete')} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );

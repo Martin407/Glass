@@ -36,6 +36,22 @@ export const agentsApi = {
   listSessionEvents: (sessionId: string) => fetchApi(`/sessions/${sessionId}/events`),
   sendSessionEvent: (sessionId: string, data: any) => fetchApi(`/sessions/${sessionId}/events`, { method: 'POST', body: JSON.stringify(data) }),
   streamSessionEvents: (sessionId: string) => new EventSource(`${API_BASE}/sessions/${sessionId}/events/stream`),
+  runSession: async (sessionId: string, message: string, options?: RequestInit) => {
+    const response = await fetch(`${API_BASE}/sessions/${sessionId}/run`, {
+      method: 'POST',
+      body: JSON.stringify({ message }),
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...options?.headers,
+      },
+    });
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`API error: ${response.status} - ${error}`);
+    }
+    return response;
+  },
 
   // Session Resources
   addSessionResource: (sessionId: string, data: any) => fetchApi(`/sessions/${sessionId}/resources`, { method: 'POST', body: JSON.stringify(data) }),

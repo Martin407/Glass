@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { RealtimeStateObject } from './durable-object'
+import { Anthropic } from '@anthropic-ai/sdk'
 
 type Bindings = {
   DB: D1Database
@@ -24,14 +25,22 @@ app.use('*', async (c, next) => {
   await next()
 })
 
-const getAnthropicHeaders = (c: any) => ({
-  'Content-Type': 'application/json',
-  'anthropic-version': '2023-06-01',
-  'anthropic-beta': 'managed-agents-2026-04-01',
-  'X-Api-Key': c.env.ANTHROPIC_API_KEY || 'dummy'
-})
+const getAnthropicHeaders = (c: any) => {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'anthropic-version': '2023-06-01',
+    'anthropic-beta': 'managed-agents-2026-04-01',
+  }
+  if (c.env.ANTHROPIC_API_KEY) {
+    headers['X-Api-Key'] = c.env.ANTHROPIC_API_KEY
+  }
+  return headers
+}
 
 const fetchAnthropic = async (c: any, endpoint: string, options: RequestInit = {}) => {
+  if (!c.env.ANTHROPIC_API_KEY) {
+    return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 500);
+  }
   try {
     const response = await fetch(`https://api.anthropic.com/v1${endpoint}`, {
       ...options,
@@ -96,15 +105,56 @@ app.get('/agents/:agent_id/versions', async (c) => {
 // ----- Sessions Endpoints -----
 app.post('/sessions', async (c) => {
   try {
+    if (!c.env.ANTHROPIC_API_KEY) {
+      return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 500)
+    }
+    const user = c.get('user')
     const body = await c.req.json().catch(() => ({}))
-    return fetchAnthropic(c, '/sessions', { method: 'POST', body: JSON.stringify(body) })
+
+    // Create session in Anthropic
+    const response = await fetch(`https://api.anthropic.com/v1/sessions`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+      headers: getAnthropicHeaders(c)
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({})) as any;
+      return c.json({ error: errorData.error?.message || `Anthropic API Error: ${response.status} ${response.statusText}` }, response.status as any);
+    }
+
+    const data: any = await response.json();
+
+    // Store mapping in D1
+    if (data.id) {
+      try {
+        await c.env.DB.prepare('INSERT INTO sessions (id, user_id) VALUES (?, ?)')
+          .bind(data.id, user.id)
+          .run()
+      } catch (err: any) {
+        if (typeof err?.message === 'string' && err.message.toLowerCase().includes('constraint')) {
+          return c.json({ error: 'Failed to store session mapping due to a session ID conflict.' }, 409)
+        }
+        throw err
+      }
+    }
+
+    return c.json(data)
   } catch (err: any) {
     return c.json({ error: err.message }, 500)
   }
 })
 
 app.get('/sessions', async (c) => {
-  return fetchAnthropic(c, '/sessions')
+  try {
+    const user = c.get('user')
+    const { results } = await c.env.DB.prepare('SELECT id, created_at FROM sessions WHERE user_id = ?')
+      .bind(user.id)
+      .all()
+    return c.json({ data: results })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  }
 })
 
 app.get('/sessions/:session_id', async (c) => {
@@ -129,6 +179,76 @@ app.post('/sessions/:session_id/archive', async (c) => {
 })
 
 // ----- Session Events Endpoints -----
+
+app.post('/sessions/:session_id/run', async (c) => {
+  try {
+    const sessionId = c.req.param('session_id')
+    const { message } = await c.req.json().catch(() => ({}))
+    const user = c.get('user');
+
+    if (!c.env.ANTHROPIC_API_KEY) {
+      return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 500);
+    }
+
+    // Verify ownership
+    const sessionOwner = await c.env.DB.prepare('SELECT user_id FROM sessions WHERE id = ?')
+      .bind(sessionId)
+      .first<{ user_id: string }>();
+
+    if (!sessionOwner || sessionOwner.user_id !== user.id) {
+      return c.json({ error: 'Session not found or unauthorized' }, 403);
+    }
+
+    // Prepare events array
+    const events = [];
+    if (message) {
+      events.push({
+        type: 'user.message' as const,
+        content: [
+          { type: 'text' as const, text: message }
+        ]
+      });
+    }
+
+    const client = new Anthropic({
+      apiKey: c.env.ANTHROPIC_API_KEY
+    });
+
+    // Establish the stream first to avoid race conditions
+    const sessionStream = await client.beta.sessions.events.stream(sessionId);
+
+    return streamSSE(c, async (stream) => {
+      if (events.length > 0) {
+        try {
+          await client.beta.sessions.events.send(sessionId, { events });
+        } catch (err: any) {
+          await stream.writeSSE({
+            data: JSON.stringify({ error: err.message }),
+            event: 'error',
+          });
+          return;
+        }
+      }
+      try {
+        for await (const event of sessionStream) {
+          await stream.writeSSE({
+            data: JSON.stringify(event),
+            event: 'message',
+            id: String(Date.now())
+          });
+        }
+      } catch (err: any) {
+        await stream.writeSSE({
+          data: JSON.stringify({ error: err.message }),
+          event: 'error',
+        })
+      }
+    })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  }
+})
+
 app.get('/sessions/:session_id/events', async (c) => {
   return fetchAnthropic(c, `/sessions/${c.req.param('session_id')}/events`)
 })

@@ -6,9 +6,16 @@ import { OktaAuth, toRelativeUrl } from '@okta/okta-auth-js'
 import './index.css'
 import App from './App.tsx'
 
+const issuer = import.meta.env.VITE_OKTA_ISSUER;
+const clientId = import.meta.env.VITE_OKTA_CLIENT_ID;
+
+if (!issuer || !clientId) {
+  throw new Error("Missing VITE_OKTA_ISSUER or VITE_OKTA_CLIENT_ID environment variables.");
+}
+
 const oktaAuth = new OktaAuth({
-  issuer: import.meta.env.VITE_OKTA_ISSUER || 'https://dev-00000000.okta.com/oauth2/default',
-  clientId: import.meta.env.VITE_OKTA_CLIENT_ID || '0oa00000000000000000',
+  issuer,
+  clientId,
   redirectUri: window.location.origin + '/login/callback',
   scopes: ['openid', 'profile', 'email'],
   pkce: true,

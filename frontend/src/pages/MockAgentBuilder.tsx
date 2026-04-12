@@ -1,4 +1,3 @@
-import React from 'react';
 import AgentBuilder from './AgentBuilder';
 
 export default function MockAgentBuilder() {

@@ -51,4 +51,10 @@ export const agentsApi = {
   updateEnvironment: (id: string, data: any) => fetchApi(`/environments/${id}`, { method: 'POST', body: JSON.stringify(data) }),
   deleteEnvironment: (id: string) => fetchApi(`/environments/${id}`, { method: 'DELETE' }),
   archiveEnvironment: (id: string) => fetchApi(`/environments/${id}/archive`, { method: 'POST' }),
+
+  // MCP
+  getMcpConnections: () => fetchApi('/mcp/connections'),
+  getMcpTools: (provider: string) => fetchApi(`/mcp/tools/${provider}`),
+  updateMcpToolPermission: (provider: string, toolName: string, permission: string) => fetchApi(`/mcp/tools/${provider}/${encodeURIComponent(toolName)}`, { method: 'POST', body: JSON.stringify({ permission }) }),
+
 };

@@ -31,7 +31,12 @@ const SQLITE_CONSTRAINT_ERROR_CODE = '19';
 
 const normalizeOktaDomain = (domain: string): string => {
   const trimmedDomain = domain.trim();
-  const parsedUrl = new URL(trimmedDomain.includes('://') ? trimmedDomain : `https://${trimmedDomain}`);
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(trimmedDomain.includes('://') ? trimmedDomain : `https://${trimmedDomain}`);
+  } catch {
+    throw new Error('OKTA_DOMAIN must be a valid domain or URL');
+  }
   if (parsedUrl.pathname !== '/' || parsedUrl.search || parsedUrl.hash) {
     throw new Error('OKTA_DOMAIN must not include a path, query, or fragment');
   }
@@ -39,7 +44,12 @@ const normalizeOktaDomain = (domain: string): string => {
 };
 
 const normalizeIssuer = (configuredIssuer: string): string => {
-  const parsedUrl = new URL(configuredIssuer.trim());
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(configuredIssuer.trim());
+  } catch {
+    throw new Error('OKTA_ISSUER must be a valid URL');
+  }
   if (parsedUrl.search || parsedUrl.hash) {
     throw new Error('OKTA_ISSUER must not include a query or fragment');
   }
@@ -100,7 +110,7 @@ const archiveUpstreamResource = async (
       headers: getAnthropicHeaders(c)
     });
     if (!archiveResponse.ok) {
-      const archiveErrorData = await archiveResponse.json().catch(() => ({})) as any;
+      const archiveErrorData: unknown = await archiveResponse.json().catch(() => null);
       console.error(`${errorContext}: upstream archive failed with ${archiveResponse.status}`, archiveErrorData);
     }
   } catch (archiveError) {
@@ -254,7 +264,7 @@ app.get('/agents', async (c) => {
       .all<{ id: string }>();
     const ownedAgentIds = new Set(results.map((row: { id: string }) => row.id));
     if (ownedAgentIds.size === 0) {
-      return c.json({ data: [], has_more: false, first_id: null, last_id: null });
+      return c.json({ data: [] });
     }
 
     const response = await fetch(`https://api.anthropic.com/v1/agents`, {

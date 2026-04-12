@@ -37,11 +37,9 @@ const getUser = (c: AppContext): { id: string } => c.get('user');
 
 const isConstraintError = (error: unknown): boolean => {
   const candidate = error as { code?: string | number; message?: string; cause?: unknown };
-  const cause = candidate?.cause as { code?: string | number; message?: string } | undefined;
+  const cause = candidate?.cause as { code?: string | number } | undefined;
   const codes = [candidate?.code, cause?.code].map((value) => String(value ?? '').toUpperCase());
-  if (codes.includes('19') || codes.includes('SQLITE_CONSTRAINT')) return true;
-  const messages = [candidate?.message, cause?.message].join(' ').toLowerCase();
-  return messages.includes('constraint');
+  return codes.includes('19') || codes.some((code) => code.startsWith('SQLITE_CONSTRAINT'));
 };
 
 const ensureAgentOwnership = async (c: AppContext, agentId: string): Promise<Response | undefined> => {
@@ -183,7 +181,7 @@ app.post('/agents', async (c) => {
           .run();
       } catch (err: any) {
         if (isConstraintError(err)) {
-          return c.json({ error: `Agent ${data.id} already has an ownership mapping in the database.` }, 409);
+          return c.json({ error: 'Agent already exists' }, 409);
         }
         throw err;
       }

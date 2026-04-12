@@ -29,11 +29,30 @@ let jwksIssuer: string | undefined;
 // SQLite SQLITE_CONSTRAINT error code.
 const SQLITE_CONSTRAINT_ERROR_CODE = '19';
 
-const sanitizeOktaDomain = (domain: string) =>
-  domain.replace(/^https?:\/\//, '').replace(/\/+$/, '');
+const normalizeOktaDomain = (domain: string): string => {
+  const trimmedDomain = domain.trim();
+  const parsedUrl = new URL(trimmedDomain.includes('://') ? trimmedDomain : `https://${trimmedDomain}`);
+  if (parsedUrl.pathname !== '/' || parsedUrl.search || parsedUrl.hash) {
+    throw new Error('OKTA_DOMAIN must not include a path, query, or fragment');
+  }
+  return parsedUrl.host;
+};
 
-const getOktaIssuer = (domain: string, configuredIssuer?: string) =>
-  configuredIssuer ?? `https://${sanitizeOktaDomain(domain)}/oauth2/default`;
+const normalizeIssuer = (configuredIssuer: string): string => {
+  const parsedUrl = new URL(configuredIssuer.trim());
+  if (parsedUrl.search || parsedUrl.hash) {
+    throw new Error('OKTA_ISSUER must not include a query or fragment');
+  }
+  parsedUrl.pathname = parsedUrl.pathname.replace(/\/+$/, '');
+  return parsedUrl.toString();
+};
+
+const getOktaIssuer = (domain: string, configuredIssuer?: string) => {
+  if (configuredIssuer) {
+    return normalizeIssuer(configuredIssuer);
+  }
+  return `https://${normalizeOktaDomain(domain)}/oauth2/default`;
+};
 
 const getOktaAudience = (configuredAudience?: string, clientId?: string) =>
   configuredAudience ?? clientId;
@@ -69,6 +88,26 @@ const ensureSessionOwnership = async (c: AppContext, sessionId: string): Promise
   }
 };
 
+const archiveUpstreamResource = async (
+  c: AppContext,
+  resourceType: 'agents' | 'sessions',
+  resourceId: string,
+  errorContext: string
+) => {
+  try {
+    const archiveResponse = await fetch(`https://api.anthropic.com/v1/${resourceType}/${resourceId}/archive`, {
+      method: 'POST',
+      headers: getAnthropicHeaders(c)
+    });
+    if (!archiveResponse.ok) {
+      const archiveErrorData = await archiveResponse.json().catch(() => ({})) as any;
+      console.error(`${errorContext}: upstream archive failed with ${archiveResponse.status}`, archiveErrorData);
+    }
+  } catch (archiveError) {
+    console.error(`${errorContext}: upstream archive request failed`, archiveError);
+  }
+};
+
 // Auth Middleware
 app.use('*', async (c, next) => {
   if (!c.env.OKTA_DOMAIN) {
@@ -79,7 +118,12 @@ app.use('*', async (c, next) => {
     return c.json({ error: 'Authentication is misconfigured: OKTA_DOMAIN is required' }, 500);
   }
 
-  const issuer = getOktaIssuer(c.env.OKTA_DOMAIN, c.env.OKTA_ISSUER);
+  let issuer: string;
+  try {
+    issuer = getOktaIssuer(c.env.OKTA_DOMAIN, c.env.OKTA_ISSUER);
+  } catch (error: any) {
+    return c.json({ error: `Authentication is misconfigured: ${error.message}` }, 500);
+  }
   const audience = getOktaAudience(c.env.OKTA_AUDIENCE, c.env.OKTA_CLIENT_ID);
   if (!audience) {
     return c.json({ error: 'Authentication is misconfigured: OKTA_AUDIENCE or OKTA_CLIENT_ID is required' }, 500);
@@ -185,16 +229,11 @@ app.post('/agents', async (c) => {
           .bind(data.id, user.id)
           .run();
       } catch (err: any) {
+        await archiveUpstreamResource(c, 'agents', data.id, 'Failed to persist local agent ownership after upstream create');
         if (isConstraintError(err)) {
-          await fetch(`https://api.anthropic.com/v1/agents/${data.id}/archive`, {
-            method: 'POST',
-            headers: getAnthropicHeaders(c)
-          }).catch((archiveError) => {
-            console.error('Failed to archive agent after ownership insert conflict', archiveError);
-          });
           return c.json({ error: 'Agent already exists' }, 409);
         }
-        throw err;
+        return c.json({ error: 'Failed to store local agent ownership after creating agent' }, 500);
       }
     }
 
@@ -214,6 +253,9 @@ app.get('/agents', async (c) => {
       .bind(user.id)
       .all<{ id: string }>();
     const ownedAgentIds = new Set(results.map((row: { id: string }) => row.id));
+    if (ownedAgentIds.size === 0) {
+      return c.json({ data: [], has_more: false, first_id: null, last_id: null });
+    }
 
     const response = await fetch(`https://api.anthropic.com/v1/agents`, {
       headers: getAnthropicHeaders(c)
@@ -301,10 +343,11 @@ app.post('/sessions', async (c) => {
           .bind(data.id, user.id)
           .run()
       } catch (err: any) {
+        await archiveUpstreamResource(c, 'sessions', data.id, 'Failed to persist local session ownership after upstream create');
         if (isConstraintError(err)) {
           return c.json({ error: 'Failed to store session mapping due to a session ID conflict.' }, 409)
         }
-        throw err
+        return c.json({ error: 'Failed to store local session ownership after creating session.' }, 500)
       }
     }
 

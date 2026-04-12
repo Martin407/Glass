@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { RealtimeStateObject } from './durable-object'
 import { Anthropic } from '@anthropic-ai/sdk'
+import { jwtVerify, createRemoteJWKSet } from 'jose'
 
 type Bindings = {
   DB: D1Database
@@ -18,11 +19,38 @@ type Variables = {
 
 const app = new Hono<{ Bindings: Bindings; Variables: Variables }>()
 
-// Auth Middleware (Placeholder)
+let jwks: ReturnType<typeof createRemoteJWKSet> | undefined;
+
+// Auth Middleware
 app.use('*', async (c, next) => {
-  const authHeader = c.req.header('Authorization')
-  c.set('user', { id: 'user-123' }) // Mock user
-  await next()
+  if (!c.env.OKTA_DOMAIN) {
+    // Bypass authentication if OKTA_DOMAIN is not set (e.g., local development/testing)
+    c.set('user', { id: 'user-123' });
+    return await next();
+  }
+
+  const authHeader = c.req.header('Authorization');
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return c.json({ error: 'Missing or invalid Authorization header' }, 401);
+  }
+
+  const token = authHeader.split(' ')[1];
+
+  if (!jwks) {
+    jwks = createRemoteJWKSet(new URL(`https://${c.env.OKTA_DOMAIN}/oauth2/default/v1/keys`));
+  }
+
+  try {
+    const { payload } = await jwtVerify(token, jwks);
+    if (!payload.sub) {
+      return c.json({ error: 'Invalid token: missing sub claim' }, 401);
+    }
+    c.set('user', { id: payload.sub });
+  } catch (error) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+
+  await next();
 })
 
 const getAnthropicHeaders = (c: any) => {
@@ -33,6 +61,10 @@ const getAnthropicHeaders = (c: any) => {
   }
   if (c.env.ANTHROPIC_API_KEY) {
     headers['X-Api-Key'] = c.env.ANTHROPIC_API_KEY
+  }
+  const user = c.get('user')
+  if (user && user.id) {
+    headers['x-okta-user-id'] = user.id
   }
   return headers
 }
@@ -200,7 +232,7 @@ app.post('/sessions/:session_id/run', async (c) => {
     }
 
     // Prepare events array
-    const events = [];
+    const events: any[] = [];
     if (message) {
       events.push({
         type: 'user.message' as const,
@@ -211,7 +243,8 @@ app.post('/sessions/:session_id/run', async (c) => {
     }
 
     const client = new Anthropic({
-      apiKey: c.env.ANTHROPIC_API_KEY
+      apiKey: c.env.ANTHROPIC_API_KEY,
+      defaultHeaders: { 'x-okta-user-id': user.id }
     });
 
     // Establish the stream first to avoid race conditions

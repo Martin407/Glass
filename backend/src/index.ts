@@ -26,13 +26,14 @@ const app = new Hono<{ Bindings: Bindings; Variables: Variables }>()
 
 let jwks: ReturnType<typeof createRemoteJWKSet> | undefined;
 let jwksIssuer: string | undefined;
-const SQLITE_CONSTRAINT_CODE = '19';
+// SQLite SQLITE_CONSTRAINT error code.
+const SQLITE_CONSTRAINT_ERROR_CODE = '19';
 
-const normalizeOktaDomain = (domain: string) =>
+const sanitizeOktaDomain = (domain: string) =>
   domain.replace(/^https?:\/\//, '').replace(/\/+$/, '');
 
 const getOktaIssuer = (domain: string, configuredIssuer?: string) =>
-  configuredIssuer ?? `https://${normalizeOktaDomain(domain)}/oauth2/default`;
+  configuredIssuer ?? `https://${sanitizeOktaDomain(domain)}/oauth2/default`;
 
 const getOktaAudience = (configuredAudience?: string, clientId?: string) =>
   configuredAudience ?? clientId;
@@ -43,7 +44,7 @@ const isConstraintError = (error: unknown): boolean => {
   const candidate = error as { code?: string | number; message?: string; cause?: unknown };
   const cause = candidate?.cause as { code?: string | number } | undefined;
   const codes = [candidate?.code, cause?.code].map((value) => String(value ?? '').toUpperCase());
-  return codes.includes(SQLITE_CONSTRAINT_CODE) || codes.some((code) => code.startsWith('SQLITE_CONSTRAINT'));
+  return codes.includes(SQLITE_CONSTRAINT_ERROR_CODE) || codes.some((code) => code.startsWith('SQLITE_CONSTRAINT'));
 };
 
 const ensureAgentOwnership = async (c: AppContext, agentId: string): Promise<Response | undefined> => {
@@ -188,7 +189,9 @@ app.post('/agents', async (c) => {
           await fetch(`https://api.anthropic.com/v1/agents/${data.id}/archive`, {
             method: 'POST',
             headers: getAnthropicHeaders(c)
-          }).catch(() => undefined);
+          }).catch((archiveError) => {
+            console.error('Failed to archive agent after ownership insert conflict', archiveError);
+          });
           return c.json({ error: 'Agent already exists' }, 409);
         }
         throw err;
@@ -271,11 +274,11 @@ app.post('/sessions', async (c) => {
     const user = getUser(c)
     const body = await c.req.json().catch(() => ({}))
     const agentId = typeof body?.agent_id === 'string' ? body.agent_id : undefined;
-
-    if (agentId) {
-      const ownershipError = await ensureAgentOwnership(c, agentId);
-      if (ownershipError) return ownershipError;
+    if (!agentId) {
+      return c.json({ error: 'agent_id is required' }, 400);
     }
+    const ownershipError = await ensureAgentOwnership(c, agentId);
+    if (ownershipError) return ownershipError;
 
     // Create session in Anthropic
     const response = await fetch(`https://api.anthropic.com/v1/sessions`, {

@@ -36,6 +36,11 @@ export const agentsApi = {
   listSessionEvents: (sessionId: string) => fetchApi(`/sessions/${sessionId}/events`),
   sendSessionEvent: (sessionId: string, data: any) => fetchApi(`/sessions/${sessionId}/events`, { method: 'POST', body: JSON.stringify(data) }),
   streamSessionEvents: (sessionId: string) => new EventSource(`${API_BASE}/sessions/${sessionId}/events/stream`),
+  runSession: (sessionId: string, message: string) => fetch(`${API_BASE}/sessions/${sessionId}/run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message }),
+  }),
 
   // Session Resources
   addSessionResource: (sessionId: string, data: any) => fetchApi(`/sessions/${sessionId}/resources`, { method: 'POST', body: JSON.stringify(data) }),

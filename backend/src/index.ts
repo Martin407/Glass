@@ -209,12 +209,18 @@ app.post('/sessions/:session_id/run', async (c) => {
     // Establish the stream first to avoid race conditions
     const sessionStream = await client.beta.sessions.events.stream(sessionId);
 
-    // Send the events asynchronously now that the stream is open
-    if (events.length > 0) {
-      client.beta.sessions.events.send(sessionId, { events }).catch(err => console.error("Error sending events:", err));
-    }
-
     return streamSSE(c, async (stream) => {
+      if (events.length > 0) {
+        try {
+          await client.beta.sessions.events.send(sessionId, { events });
+        } catch (err: any) {
+          await stream.writeSSE({
+            data: JSON.stringify({ error: err.message }),
+            event: 'error',
+          });
+          return;
+        }
+      }
       try {
         for await (const event of sessionStream) {
           await stream.writeSSE({

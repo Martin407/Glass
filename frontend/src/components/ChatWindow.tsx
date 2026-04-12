@@ -86,9 +86,16 @@ export function ChatWindow({ sessionId, onClose }: ChatWindowProps) {
               const event = JSON.parse(dataStr);
 
               if (event.type === 'agent.message') {
-                if (event.content?.[0]?.type === 'text') {
+                const textContent = Array.isArray(event.content)
+                  ? event.content
+                      .filter((block: { type?: string; text?: string }) => block?.type === 'text' && typeof block.text === 'string')
+                      .map((block: { type?: string; text?: string }) => block.text as string)
+                      .join('')
+                  : '';
+
+                if (textContent) {
                   setMessages(prev => prev.map(m =>
-                    m.id === currentAgentMsgId ? { ...m, content: event.content[0].text } : m
+                    m.id === currentAgentMsgId ? { ...m, content: textContent } : m
                   ));
                 }
               } else if (event.type === 'agent.custom_tool_use' || event.type === 'agent.tool_use') {

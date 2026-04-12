@@ -185,6 +185,10 @@ app.post('/agents', async (c) => {
           .run();
       } catch (err: any) {
         if (isConstraintError(err)) {
+          await fetch(`https://api.anthropic.com/v1/agents/${data.id}/archive`, {
+            method: 'POST',
+            headers: getAnthropicHeaders(c)
+          }).catch(() => undefined);
           return c.json({ error: 'Agent already exists' }, 409);
         }
         throw err;

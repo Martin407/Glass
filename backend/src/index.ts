@@ -243,6 +243,7 @@ app.post('/agents', async (c) => {
         if (isConstraintError(err)) {
           return c.json({ error: 'Agent already exists' }, 409);
         }
+        console.error('Failed to store local agent ownership after creating agent', err);
         return c.json({ error: 'Failed to store local agent ownership after creating agent' }, 500);
       }
     }
@@ -355,9 +356,10 @@ app.post('/sessions', async (c) => {
       } catch (err: any) {
         await archiveUpstreamResource(c, 'sessions', data.id, 'Failed to persist local session ownership after upstream create');
         if (isConstraintError(err)) {
-          return c.json({ error: 'Failed to store session mapping due to a session ID conflict.' }, 409)
+          return c.json({ error: 'Failed to store session mapping due to a session ID conflict.' }, 409);
         }
-        return c.json({ error: 'Failed to store local session ownership after creating session' }, 500)
+        console.error('Failed to store local session ownership after creating session', err);
+        return c.json({ error: 'Failed to store local session ownership after creating session' }, 500);
       }
     }
 

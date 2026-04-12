@@ -1,4 +1,4 @@
-import { Hono } from 'hono'
+import { Context, Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { RealtimeStateObject } from './durable-object'
 import { Anthropic } from '@anthropic-ai/sdk'
@@ -20,6 +20,8 @@ type Variables = {
   user: { id: string }
 }
 
+type AppContext = Context<{ Bindings: Bindings; Variables: Variables }>
+
 const app = new Hono<{ Bindings: Bindings; Variables: Variables }>()
 
 let jwks: ReturnType<typeof createRemoteJWKSet> | undefined;
@@ -31,9 +33,18 @@ const getOktaIssuer = (domain: string, configuredIssuer?: string) =>
 const getOktaAudience = (configuredAudience?: string, clientId?: string) =>
   configuredAudience ?? clientId;
 
-const getUser = (c: any): { id: string } => c.get('user');
+const getUser = (c: AppContext): { id: string } => c.get('user');
 
-const ensureAgentOwnership = async (c: any, agentId: string): Promise<Response | undefined> => {
+const isConstraintError = (error: unknown): boolean => {
+  const candidate = error as { code?: string | number; message?: string; cause?: unknown };
+  const cause = candidate?.cause as { code?: string | number; message?: string } | undefined;
+  const codes = [candidate?.code, cause?.code].map((value) => String(value ?? '').toUpperCase());
+  if (codes.includes('19') || codes.includes('SQLITE_CONSTRAINT')) return true;
+  const messages = [candidate?.message, cause?.message].join(' ').toLowerCase();
+  return messages.includes('constraint');
+};
+
+const ensureAgentOwnership = async (c: AppContext, agentId: string): Promise<Response | undefined> => {
   const user = getUser(c);
   const owner = await c.env.DB.prepare('SELECT user_id FROM agents WHERE id = ?')
     .bind(agentId)
@@ -44,7 +55,7 @@ const ensureAgentOwnership = async (c: any, agentId: string): Promise<Response |
   }
 };
 
-const ensureSessionOwnership = async (c: any, sessionId: string): Promise<Response | undefined> => {
+const ensureSessionOwnership = async (c: AppContext, sessionId: string): Promise<Response | undefined> => {
   const user = getUser(c);
   const owner = await c.env.DB.prepare('SELECT user_id FROM sessions WHERE id = ?')
     .bind(sessionId)
@@ -171,8 +182,8 @@ app.post('/agents', async (c) => {
           .bind(data.id, user.id)
           .run();
       } catch (err: any) {
-        if (typeof err?.message === 'string' && err.message.toLowerCase().includes('constraint')) {
-          return c.json({ error: 'Failed to store agent mapping due to an agent ID conflict.' }, 409);
+        if (isConstraintError(err)) {
+          return c.json({ error: `Agent ${data.id} already has an ownership mapping in the database.` }, 409);
         }
         throw err;
       }
@@ -281,7 +292,7 @@ app.post('/sessions', async (c) => {
           .bind(data.id, user.id)
           .run()
       } catch (err: any) {
-        if (typeof err?.message === 'string' && err.message.toLowerCase().includes('constraint')) {
+        if (isConstraintError(err)) {
           return c.json({ error: 'Failed to store session mapping due to a session ID conflict.' }, 409)
         }
         throw err

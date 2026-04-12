@@ -67,3 +67,10 @@ INSERT OR IGNORE INTO global_tool_permissions (provider, tool_name, type, permis
   ('Slack', 'Send message', 'write_delete', 'ask'),
   ('Slack', 'Create canvas', 'write_delete', 'allow'),
   ('Slack', 'Update canvas', 'write_delete', 'ask');
+CREATE TABLE IF NOT EXISTS sessions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);

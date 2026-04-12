@@ -110,7 +110,7 @@ const archiveUpstreamResource = async (
       headers: getAnthropicHeaders(c)
     });
     if (!archiveResponse.ok) {
-      const archiveErrorData: unknown = await archiveResponse.json().catch(() => null);
+      const archiveErrorData: unknown = await archiveResponse.json().catch(() => 'Unable to parse upstream archive error response');
       console.error(`${errorContext}: upstream archive failed with ${archiveResponse.status}`, archiveErrorData);
     }
   } catch (archiveError) {
@@ -131,8 +131,9 @@ app.use('*', async (c, next) => {
   let issuer: string;
   try {
     issuer = getOktaIssuer(c.env.OKTA_DOMAIN, c.env.OKTA_ISSUER);
-  } catch (error: any) {
-    return c.json({ error: `Authentication is misconfigured: ${error.message}` }, 500);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Invalid OKTA auth configuration';
+    return c.json({ error: `Authentication is misconfigured: ${message}` }, 500);
   }
   const audience = getOktaAudience(c.env.OKTA_AUDIENCE, c.env.OKTA_CLIENT_ID);
   if (!audience) {

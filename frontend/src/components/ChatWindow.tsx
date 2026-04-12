@@ -63,10 +63,8 @@ export function ChatWindow({ sessionId, onClose }: ChatWindowProps) {
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
-      let currentAgentMsgId = 'agent-' + crypto.randomUUID();
-
-      // Initialize an empty agent message
-      setMessages(prev => [...prev, { id: currentAgentMsgId, role: 'agent', content: '' }]);
+      // currentAgentMsgId is null until the first agent.message event is received
+      let currentAgentMsgId: string | null = null;
 
       let buffer = '';
       while (true) {
@@ -94,11 +92,18 @@ export function ChatWindow({ sessionId, onClose }: ChatWindowProps) {
                   : '';
 
                 if (textContent) {
-                  setMessages(prev => prev.map(m =>
-                    m.id === currentAgentMsgId ? { ...m, content: textContent } : m
-                  ));
+                  if (currentAgentMsgId === null) {
+                    // Create the agent message bubble only when we actually have content
+                    const newMsgId = 'agent-' + crypto.randomUUID();
+                    currentAgentMsgId = newMsgId;
+                    setMessages(prev => [...prev, { id: newMsgId, role: 'agent', content: textContent }]);
+                  } else {
+                    setMessages(prev => prev.map(m =>
+                      m.id === currentAgentMsgId ? { ...m, content: textContent } : m
+                    ));
+                  }
                 }
-              } else if (event.type === 'agent.custom_tool_use' || event.type === 'agent.tool_use') {
+              } else if (event.type === 'agent.mcp_tool_use' || event.type === 'agent.custom_tool_use') {
                  // Add a tool marker
                  setMessages(prev => [...prev, {
                    id: 'tool-' + crypto.randomUUID(),
@@ -108,9 +113,21 @@ export function ChatWindow({ sessionId, onClose }: ChatWindowProps) {
                    toolName: event.name || event.tool_name
                  }]);
 
-                 // Start a new agent text message after the tool
-                 currentAgentMsgId = 'agent-' + crypto.randomUUID();
-                 setMessages(prev => [...prev, { id: currentAgentMsgId, role: 'agent', content: '' }]);
+                 if (event.type === 'agent.custom_tool_use') {
+                   // Session is now idle waiting for a user.custom_tool_result.
+                   // Re-enable input so the user isn't stuck, and surface an info message.
+                   setMessages(prev => [...prev, {
+                     id: 'info-' + crypto.randomUUID(),
+                     role: 'agent',
+                     content: 'The agent requested a custom tool result. Input has been re-enabled so you can provide it or continue.',
+                   }]);
+                   setIsRunning(false);
+                   abortControllerRef.current?.abort();
+                   return;
+                 }
+
+                 // For MCP tool use the session continues streaming; reset for next agent message
+                 currentAgentMsgId = null;
               }
             } catch (e) {
               // Ignore parse errors

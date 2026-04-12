@@ -25,12 +25,17 @@ app.use('*', async (c, next) => {
   await next()
 })
 
-const getAnthropicHeaders = (c: any) => ({
-  'Content-Type': 'application/json',
-  'anthropic-version': '2023-06-01',
-  'anthropic-beta': 'managed-agents-2026-04-01',
-  'X-Api-Key': c.env.ANTHROPIC_API_KEY
-})
+const getAnthropicHeaders = (c: any) => {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'anthropic-version': '2023-06-01',
+    'anthropic-beta': 'managed-agents-2026-04-01',
+  }
+  if (c.env.ANTHROPIC_API_KEY) {
+    headers['X-Api-Key'] = c.env.ANTHROPIC_API_KEY
+  }
+  return headers
+}
 
 const fetchAnthropic = async (c: any, endpoint: string, options: RequestInit = {}) => {
   if (!c.env.ANTHROPIC_API_KEY) {
@@ -100,6 +105,9 @@ app.get('/agents/:agent_id/versions', async (c) => {
 // ----- Sessions Endpoints -----
 app.post('/sessions', async (c) => {
   try {
+    if (!c.env.ANTHROPIC_API_KEY) {
+      return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 500)
+    }
     const user = c.get('user')
     const body = await c.req.json().catch(() => ({}))
 

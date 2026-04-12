@@ -119,9 +119,16 @@ app.post('/sessions', async (c) => {
 
     // Store mapping in D1
     if (data.id) {
-      await c.env.DB.prepare('INSERT OR IGNORE INTO sessions (id, user_id) VALUES (?, ?)')
-        .bind(data.id, user.id)
-        .run()
+      try {
+        await c.env.DB.prepare('INSERT INTO sessions (id, user_id) VALUES (?, ?)')
+          .bind(data.id, user.id)
+          .run()
+      } catch (err: any) {
+        if (typeof err?.message === 'string' && err.message.toLowerCase().includes('constraint')) {
+          return c.json({ error: 'Failed to store session mapping due to a session ID conflict.' }, 409)
+        }
+        throw err
+      }
     }
 
     return c.json(data)

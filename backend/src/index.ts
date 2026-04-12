@@ -26,9 +26,13 @@ const app = new Hono<{ Bindings: Bindings; Variables: Variables }>()
 
 let jwks: ReturnType<typeof createRemoteJWKSet> | undefined;
 let jwksIssuer: string | undefined;
+const SQLITE_CONSTRAINT_CODE = '19';
+
+const normalizeOktaDomain = (domain: string) =>
+  domain.replace(/^https?:\/\//, '').replace(/\/+$/, '');
 
 const getOktaIssuer = (domain: string, configuredIssuer?: string) =>
-  configuredIssuer ?? `https://${domain}/oauth2/default`;
+  configuredIssuer ?? `https://${normalizeOktaDomain(domain)}/oauth2/default`;
 
 const getOktaAudience = (configuredAudience?: string, clientId?: string) =>
   configuredAudience ?? clientId;
@@ -39,7 +43,7 @@ const isConstraintError = (error: unknown): boolean => {
   const candidate = error as { code?: string | number; message?: string; cause?: unknown };
   const cause = candidate?.cause as { code?: string | number } | undefined;
   const codes = [candidate?.code, cause?.code].map((value) => String(value ?? '').toUpperCase());
-  return codes.includes('19') || codes.some((code) => code.startsWith('SQLITE_CONSTRAINT'));
+  return codes.includes(SQLITE_CONSTRAINT_CODE) || codes.some((code) => code.startsWith('SQLITE_CONSTRAINT'));
 };
 
 const ensureAgentOwnership = async (c: AppContext, agentId: string): Promise<Response | undefined> => {
@@ -202,7 +206,7 @@ app.get('/agents', async (c) => {
     const { results } = await c.env.DB.prepare('SELECT id FROM agents WHERE user_id = ?')
       .bind(user.id)
       .all<{ id: string }>();
-    const ownedAgentIds = new Set(results.map((row: any) => row.id));
+    const ownedAgentIds = new Set(results.map((row: { id: string }) => row.id));
 
     const response = await fetch(`https://api.anthropic.com/v1/agents`, {
       headers: getAnthropicHeaders(c)
@@ -215,7 +219,7 @@ app.get('/agents', async (c) => {
 
     const data: any = await response.json();
     if (Array.isArray(data?.data)) {
-      data.data = data.data.filter((agent: any) => agent?.id && ownedAgentIds.has(agent.id));
+      data.data = data.data.filter((agent: { id?: string }) => agent.id && ownedAgentIds.has(agent.id));
     } else {
       data.data = [];
     }

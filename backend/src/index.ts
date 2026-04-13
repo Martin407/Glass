@@ -76,6 +76,38 @@ export const isConstraintError = (error: unknown): boolean => {
   return codes.includes(SQLITE_CONSTRAINT_ERROR_CODE) || codes.some((code) => code.startsWith('SQLITE_CONSTRAINT'));
 };
 
+class LRUCache<K, V> {
+  private maxSize: number;
+  private cache: Map<K, V>;
+
+  constructor(maxSize: number) {
+    this.maxSize = maxSize;
+    this.cache = new Map<K, V>();
+  }
+
+  get(key: K): V | undefined {
+    if (!this.cache.has(key)) return undefined;
+    const val = this.cache.get(key)!;
+    this.cache.delete(key);
+    this.cache.set(key, val);
+    return val;
+  }
+
+  set(key: K, value: V): void {
+    if (this.cache.has(key)) {
+      this.cache.delete(key);
+    } else if (this.cache.size >= this.maxSize) {
+      const firstKey = this.cache.keys().next().value;
+      if (firstKey !== undefined) {
+        this.cache.delete(firstKey);
+      }
+    }
+    this.cache.set(key, value);
+  }
+}
+
+const sessionOwnershipCache = new LRUCache<string, string>(1000);
+
 const ensureAgentOwnership = async (c: AppContext, agentId: string): Promise<Response | undefined> => {
   const user = getUser(c);
   const owner = await c.env.DB.prepare('SELECT user_id FROM agents WHERE id = ?')
@@ -89,11 +121,21 @@ const ensureAgentOwnership = async (c: AppContext, agentId: string): Promise<Res
 
 const ensureSessionOwnership = async (c: AppContext, sessionId: string): Promise<Response | undefined> => {
   const user = getUser(c);
-  const owner = await c.env.DB.prepare('SELECT user_id FROM sessions WHERE id = ?')
-    .bind(sessionId)
-    .first<{ user_id: string }>();
 
-  if (!owner || owner.user_id !== user.id) {
+  let ownerUserId = sessionOwnershipCache.get(sessionId);
+
+  if (!ownerUserId) {
+    const owner = await c.env.DB.prepare('SELECT user_id FROM sessions WHERE id = ?')
+      .bind(sessionId)
+      .first<{ user_id: string }>();
+
+    if (owner) {
+      ownerUserId = owner.user_id;
+      sessionOwnershipCache.set(sessionId, ownerUserId);
+    }
+  }
+
+  if (!ownerUserId || ownerUserId !== user.id) {
     return c.json({ error: 'Session not found or unauthorized' }, 403);
   }
 };

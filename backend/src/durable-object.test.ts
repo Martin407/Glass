@@ -6,7 +6,7 @@ describe('RealtimeStateObject', () => {
     it('should send a message to all connected sessions', () => {
       // Mock DurableObjectState and env
       const state = {} as DurableObjectState
-      const env = {}
+      const env = {} as any
 
       const ro = new RealtimeStateObject(state, env)
 
@@ -28,7 +28,7 @@ describe('RealtimeStateObject', () => {
     it('should remove sessions that throw an error during send', () => {
       // Mock DurableObjectState and env
       const state = {} as DurableObjectState
-      const env = {}
+      const env = {} as any
 
       const ro = new RealtimeStateObject(state, env)
 

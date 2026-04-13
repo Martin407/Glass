@@ -19,7 +19,7 @@ export type Bindings = {
 }
 
 type Variables = {
-  user: { id: string }
+  user: { id: string; roles?: string[] }
 }
 
 export type AppContext = Context<{ Bindings: Bindings; Variables: Variables }>
@@ -177,7 +177,7 @@ const archiveUpstreamResource = async (
 app.use('*', async (c, next) => {
   if (!c.env.OKTA_DOMAIN) {
     if (c.env.AUTH_BYPASS_FOR_DEV === 'true') {
-      c.set('user', { id: 'user-123' });
+      c.set('user', { id: 'user-123', roles: ['admin'] });
       return await next();
     }
     console.error('Authentication is misconfigured: OKTA_DOMAIN is required');
@@ -219,7 +219,11 @@ app.use('*', async (c, next) => {
     if (!payload.sub) {
       return c.json({ error: 'Invalid token: missing sub claim' }, 401);
     }
-    c.set('user', { id: payload.sub });
+    const rawRoles = payload.groups ?? payload.roles;
+    const roles: string[] = Array.isArray(rawRoles)
+      ? rawRoles.filter((r): r is string => typeof r === 'string')
+      : [];
+    c.set('user', { id: payload.sub, roles });
     return await next();
   } catch (error: unknown) {
     return c.json({ error: 'Unauthorized' }, 401);
@@ -808,6 +812,11 @@ app.get('/mcp/tools/:provider', async (c) => {
 
 app.post('/mcp/tools/:provider/:tool_name', async (c) => {
   try {
+    const user = c.get('user');
+    if (!user.roles?.includes('admin')) {
+      return c.json({ error: 'Forbidden: Admin access required' }, 403);
+    }
+
     const provider = c.req.param('provider');
     const tool_name = decodeURIComponent(c.req.param('tool_name'));
     const body = await c.req.json().catch(() => ({}));

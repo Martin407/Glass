@@ -73,6 +73,8 @@ describe('App Component', () => {
     });
 
     // Verify console.error was called by logApiError
-    expect(console.error).toHaveBeenCalledWith('Failed to create session', mockError);
+    await waitFor(() => {
+      expect(console.error).toHaveBeenCalledWith('Failed to create session', mockError);
+    });
   });
 });

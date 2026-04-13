@@ -56,7 +56,7 @@ describe('RealtimeStateObject', () => {
   describe('fetch', () => {
     it('should return 426 if Upgrade header is not websocket', async () => {
       const state = { acceptWebSocket: vi.fn() } as unknown as DurableObjectState
-      const env = {} as any as any
+      const env = {} as any
       const ro = new RealtimeStateObject(state, env)
 
       const request = new Request('http://localhost/', {

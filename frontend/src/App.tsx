@@ -71,6 +71,11 @@ const PermissionToggle = ({ status, onToggle }: { status: string, onToggle: (new
   );
 };
 
+const logApiError = (context: string) => (err: unknown) => {
+  const error = err instanceof Error ? err : new Error(context, { cause: err });
+  console.error(context, error);
+};
+
 function App() {
   const [appState, setAppState] = useState(apps);
   const [selectedProvider, setSelectedProvider] = useState('Slack');
@@ -82,7 +87,7 @@ function App() {
   useEffect(() => {
     agentsApi.listAgents().then((res: any) => {
       if (res.data) setAgents(res.data);
-    }).catch((err) => console.error('Failed to list agents:', err instanceof Error ? err : new Error(String(err))));
+    }).catch(logApiError('Failed to list agents'));
   }, []);
 
   const handleCreateSession = async () => {
@@ -112,7 +117,7 @@ function App() {
           connected: res.connections.includes(app.name)
         })));
       }
-    }).catch((err) => console.error('Failed to get MCP connections:', err instanceof Error ? err : new Error(String(err))));
+    }).catch(logApiError('Failed to get MCP connections'));
   }, []);
 
   useEffect(() => {
@@ -121,7 +126,7 @@ function App() {
     agentsApi.getMcpTools(selectedProvider).then((res: any) => {
       setReadOnlyTools(res.read_only || []);
       setWriteDeleteTools(res.write_delete || []);
-    }).catch((err) => console.error('Failed to get MCP tools:', err instanceof Error ? err : new Error(String(err))));
+    }).catch(logApiError('Failed to get MCP tools'));
   }, [selectedProvider]);
 
   const handleToggle = (toolName: string, newStatus: string, type: 'read_only' | 'write_delete') => {
@@ -131,7 +136,7 @@ function App() {
       } else {
         setWriteDeleteTools(prev => prev.map(t => t.name === toolName ? { ...t, status: newStatus } : t));
       }
-    }).catch((err) => console.error('Failed to update MCP tool permission:', err instanceof Error ? err : new Error(String(err))));
+    }).catch(logApiError('Failed to update MCP tool permission'));
   };
 
   const selectedApp = appState.find(a => a.name === selectedProvider) || appState[0];

@@ -11,7 +11,7 @@ describe('App connections optimization', () => {
     return prev.map(app => ({
       ...app,
       connected: connections.includes(app.name)
-    }));
+    })) as unknown as void;
   });
 
   bench('optimized: Set', () => {
@@ -19,6 +19,6 @@ describe('App connections optimization', () => {
     return prev.map(app => ({
       ...app,
       connected: connectionsSet.has(app.name)
-    }));
+    })) as unknown as void;
   });
 });

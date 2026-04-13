@@ -118,12 +118,22 @@ describe('agentsApi', () => {
   });
 
   describe('MCP endpoints', () => {
+    it('successfully fetches MCP connections via getMcpConnections API helper', async () => {
+      mockFetchSuccess({ connections: [] });
+
+      await agentsApi.getMcpConnections();
+
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/mcp/connections', {
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+
     it('getMcpConnections calls GET /api/mcp/connections', async () => {
       mockFetchSuccess({ connections: [] });
 
       await agentsApi.getMcpConnections();
 
-      expect(global.fetch).toHaveBeenCalledWith('/api/mcp/connections', {
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/mcp/connections', {
         headers: { 'Content-Type': 'application/json' },
       });
     });
@@ -135,7 +145,7 @@ describe('agentsApi', () => {
       const result = await agentsApi.getMcpTools('google_drive');
 
       expect(result).toEqual(toolsResponse);
-      expect(global.fetch).toHaveBeenCalledWith('/api/mcp/tools/google_drive', {
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/mcp/tools/google_drive', {
         headers: { 'Content-Type': 'application/json' },
       });
     });
@@ -145,7 +155,7 @@ describe('agentsApi', () => {
 
       await agentsApi.updateMcpToolPermission('google_drive', 'tool/name with spaces', 'allow');
 
-      expect(global.fetch).toHaveBeenCalledWith('/api/mcp/tools/google_drive/tool%2Fname%20with%20spaces', {
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/mcp/tools/google_drive/tool%2Fname%20with%20spaces', {
         method: 'POST',
         body: JSON.stringify({ permission: 'allow' }),
         headers: { 'Content-Type': 'application/json' },

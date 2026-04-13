@@ -147,7 +147,7 @@ app.use('*', async (c, next) => {
     issuer = getOktaIssuer(c.env.OKTA_DOMAIN, c.env.OKTA_ISSUER);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Invalid OKTA auth configuration';
-    console.error(`Authentication is misconfigured: ${message}`);
+    console.error(`Authentication is misconfigured: ${message}`, error);
     return c.json({ error: 'Authentication is misconfigured' }, 500);
   }
   const audience = getOktaAudience(c.env.OKTA_AUDIENCE, c.env.OKTA_CLIENT_ID);

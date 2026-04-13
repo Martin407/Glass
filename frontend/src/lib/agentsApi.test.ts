@@ -117,6 +117,42 @@ describe('agentsApi', () => {
     });
   });
 
+  describe('MCP endpoints', () => {
+    it('getMcpConnections calls GET /api/mcp/connections', async () => {
+      mockFetchSuccess({ connections: [] });
+
+      await agentsApi.getMcpConnections();
+
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/mcp/connections', {
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+
+    it('getMcpTools calls GET /api/mcp/tools/:provider', async () => {
+      const toolsResponse = { read_only: [], write_delete: [] };
+      mockFetchSuccess(toolsResponse);
+
+      const result = await agentsApi.getMcpTools('google_drive');
+
+      expect(result).toEqual(toolsResponse);
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/mcp/tools/google_drive', {
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+
+    it('updateMcpToolPermission calls POST /api/mcp/tools/:provider/:toolName with properly encoded toolName and correct body', async () => {
+      mockFetchSuccess({ success: true });
+
+      await agentsApi.updateMcpToolPermission('google_drive', 'tool/name with spaces', 'allow');
+
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/mcp/tools/google_drive/tool%2Fname%20with%20spaces', {
+        method: 'POST',
+        body: JSON.stringify({ permission: 'allow' }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+  });
+
   describe('Session endpoints', () => {
     it('runSession calls POST /api/sessions/:sessionId/run', async () => {
       // runSession does not parse json immediately, returns response directly

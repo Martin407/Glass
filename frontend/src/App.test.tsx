@@ -48,7 +48,7 @@ describe('App Component', () => {
 
   it('logs an error when session creation fails', async () => {
     // Setup agents mock so the button is not disabled
-    const listAgentsMock = vi.mocked(agentsApi.listAgents).mockResolvedValueOnce({
+    vi.mocked(agentsApi.listAgents).mockResolvedValueOnce({
       data: [{ id: 'agent-1', name: 'Test Agent' }]
     });
 

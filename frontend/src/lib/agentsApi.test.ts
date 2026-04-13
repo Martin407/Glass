@@ -1,31 +1,31 @@
-import { describe, it, expect, vi, beforeEach, afterEach, Mock } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
 import { agentsApi } from './agentsApi';
 
 describe('agentsApi', () => {
-  let originalFetch: typeof global.fetch;
-  let originalEventSource: typeof global.EventSource;
+  let originalFetch: typeof globalThis.fetch;
+  let originalEventSource: typeof globalThis.EventSource;
 
   beforeEach(() => {
-    originalFetch = global.fetch;
-    originalEventSource = global.EventSource;
-    global.fetch = vi.fn();
+    originalFetch = globalThis.fetch;
+    originalEventSource = globalThis.EventSource;
+    globalThis.fetch = vi.fn();
   });
 
   afterEach(() => {
-    global.fetch = originalFetch;
-    global.EventSource = originalEventSource;
+    globalThis.fetch = originalFetch;
+    globalThis.EventSource = originalEventSource;
     vi.clearAllMocks();
   });
 
   const mockFetchSuccess = (data: any) => {
-    (global.fetch as Mock).mockResolvedValueOnce({
+    (globalThis.fetch as Mock).mockResolvedValueOnce({
       ok: true,
       json: async () => data,
     });
   };
 
   const mockFetchError = (status: number, text: string) => {
-    (global.fetch as Mock).mockResolvedValueOnce({
+    (globalThis.fetch as Mock).mockResolvedValueOnce({
       ok: false,
       status,
       text: async () => text,
@@ -55,7 +55,7 @@ describe('agentsApi', () => {
 
       await agentsApi.createAgent(data);
 
-      expect(global.fetch).toHaveBeenCalledWith('/api/agents', {
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/agents', {
         method: 'POST',
         body: JSON.stringify(data),
         headers: { 'Content-Type': 'application/json' },
@@ -67,7 +67,7 @@ describe('agentsApi', () => {
 
       await agentsApi.listAgents();
 
-      expect(global.fetch).toHaveBeenCalledWith('/api/agents', {
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/agents', {
         headers: { 'Content-Type': 'application/json' },
       });
     });
@@ -77,7 +77,7 @@ describe('agentsApi', () => {
 
       await agentsApi.getAgent('1');
 
-      expect(global.fetch).toHaveBeenCalledWith('/api/agents/1', {
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/agents/1', {
         headers: { 'Content-Type': 'application/json' },
       });
     });
@@ -88,7 +88,7 @@ describe('agentsApi', () => {
 
       await agentsApi.updateAgent('1', data);
 
-      expect(global.fetch).toHaveBeenCalledWith('/api/agents/1', {
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/agents/1', {
         method: 'POST',
         body: JSON.stringify(data),
         headers: { 'Content-Type': 'application/json' },
@@ -100,7 +100,7 @@ describe('agentsApi', () => {
 
       await agentsApi.archiveAgent('1');
 
-      expect(global.fetch).toHaveBeenCalledWith('/api/agents/1/archive', {
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/agents/1/archive', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
       });
@@ -111,7 +111,7 @@ describe('agentsApi', () => {
 
       await agentsApi.getAgentVersions('1');
 
-      expect(global.fetch).toHaveBeenCalledWith('/api/agents/1/versions', {
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/agents/1/versions', {
         headers: { 'Content-Type': 'application/json' },
       });
     });
@@ -156,7 +156,7 @@ describe('agentsApi', () => {
   describe('Session endpoints', () => {
     it('runSession calls POST /api/sessions/:sessionId/run', async () => {
       // runSession does not parse json immediately, returns response directly
-      (global.fetch as Mock).mockResolvedValueOnce({
+      (globalThis.fetch as Mock).mockResolvedValueOnce({
         ok: true,
         json: async () => ({}), // dummy
       });
@@ -164,7 +164,7 @@ describe('agentsApi', () => {
 
       await agentsApi.runSession('s1', message);
 
-      expect(global.fetch).toHaveBeenCalledWith('/api/sessions/s1/run', {
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/sessions/s1/run', {
         method: 'POST',
         body: JSON.stringify({ message }),
         headers: { 'Content-Type': 'application/json' },
@@ -179,7 +179,7 @@ describe('agentsApi', () => {
 
     it('streamSessionEvents creates EventSource with correct URL', () => {
       const mockEventSource = vi.fn();
-      global.EventSource = mockEventSource as any;
+      globalThis.EventSource = mockEventSource as any;
 
       agentsApi.streamSessionEvents('s1');
 

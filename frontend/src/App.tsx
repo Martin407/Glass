@@ -112,9 +112,10 @@ function App() {
   useEffect(() => {
     agentsApi.getMcpConnections().then((res: any) => {
       if (res.connections) {
+        const connectionsSet = new Set(res.connections);
         setAppState(prev => prev.map(app => ({
           ...app,
-          connected: res.connections.includes(app.name)
+          connected: connectionsSet.has(app.name)
         })));
       }
     }).catch(logApiError('Failed to get MCP connections'));

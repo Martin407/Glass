@@ -12,6 +12,7 @@ describe('POST /agents Error Paths', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it('should handle D1 agent insertion failure and attempt to archive upstream', async () => {

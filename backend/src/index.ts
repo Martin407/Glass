@@ -5,6 +5,7 @@ const getErrorMessage = (error: unknown): string => error instanceof Error ? err
 import { RealtimeStateObject } from './durable-object'
 import { Anthropic } from '@anthropic-ai/sdk'
 import { jwtVerify, createRemoteJWKSet } from 'jose'
+import { processSessionStream } from './stream'
 
 export type Bindings = {
   DB: D1Database
@@ -66,7 +67,7 @@ export const getOktaIssuer = (domain: string, configuredIssuer?: string) => {
   return `https://${normalizeOktaDomain(domain)}/oauth2/default`;
 };
 
-const getOktaAudience = (configuredAudience?: string, clientId?: string) =>
+export const getOktaAudience = (configuredAudience?: string, clientId?: string) =>
   configuredAudience ?? clientId;
 
 const getUser = (c: AppContext): { id: string } => c.get('user');
@@ -514,40 +515,7 @@ app.post('/sessions/:session_id/run', async (c) => {
     const sessionStream = await client.beta.sessions.events.stream(sessionId);
 
     return streamSSE(c, async (stream) => {
-      if (events.length > 0) {
-        // Send events asynchronously without awaiting so the stream can start processing them immediately.
-        // Use void to explicitly discard the returned Promise (fire-and-forget with handled rejection).
-        void client.beta.sessions.events.send(sessionId, { events }).catch((err: any) => {
-          console.error('Error sending events to stream:', err);
-          // Abort the session stream so the for-await loop below terminates instead of hanging.
-          sessionStream.controller.abort();
-          stream.writeSSE({
-            data: JSON.stringify({ error: err.message }),
-            event: 'error',
-          }).catch(() => {
-            // Ignore stream write errors if connection already closed
-          });
-        });
-      }
-
-      try {
-        for await (const event of sessionStream) {
-          await stream.writeSSE({
-            data: JSON.stringify(event),
-            event: 'message',
-            id: String(Date.now())
-          });
-        }
-      } catch (err: any) {
-        // If the stream was intentionally aborted (due to events.send failure above),
-        // skip writing a duplicate/misleading error event — the catch above already sent one.
-        if (!sessionStream.controller.signal.aborted) {
-          await stream.writeSSE({
-            data: JSON.stringify({ error: err.message }),
-            event: 'error',
-          });
-        }
-      }
+      await processSessionStream(stream, sessionStream, client, sessionId, events);
     })
   } catch (err: unknown) {
     return c.json({ error: getErrorMessage(err) }, 500)

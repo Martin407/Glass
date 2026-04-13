@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies (Backend)
+        run: cd backend && npm ci
+
+      - name: Install dependencies (Frontend)
+        run: cd frontend && npm ci
+
+      - name: Typecheck (Backend)
+        run: cd backend && npx tsc --noEmit
+
+      - name: Typecheck (Frontend)
+        run: cd frontend && npm run build
+
+      - name: Test (Backend)
+        run: cd backend && npm test
+
+      - name: Test (Frontend)
+        run: cd frontend && npm test
+
+      - name: Lint (Frontend)
+        run: cd frontend && npm run lint

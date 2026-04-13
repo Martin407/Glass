@@ -4,7 +4,7 @@ import { RealtimeStateObject } from './durable-object'
 import { Anthropic } from '@anthropic-ai/sdk'
 import { jwtVerify, createRemoteJWKSet } from 'jose'
 
-type Bindings = {
+export type Bindings = {
   DB: D1Database
   REALTIME_STATE: DurableObjectNamespace
   ANTHROPIC_API_KEY?: string

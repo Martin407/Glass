@@ -1,4 +1,4 @@
-import { Bindings } from './index'
+import type { Bindings } from './index'
 
 export class RealtimeStateObject {
   state: DurableObjectState

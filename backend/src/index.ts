@@ -168,7 +168,7 @@ app.use('*', async (c, next) => {
   }
 })
 
-const getAnthropicHeaders = (c: any) => {
+const getAnthropicHeaders = (c: AppContext) => {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'anthropic-version': '2023-06-01',
@@ -184,7 +184,7 @@ const getAnthropicHeaders = (c: any) => {
   return headers
 }
 
-const fetchAnthropic = async (c: any, endpoint: string, options: RequestInit = {}) => {
+const fetchAnthropic = async (c: AppContext, endpoint: string, options: RequestInit = {}) => {
   if (!c.env.ANTHROPIC_API_KEY) {
     return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 500);
   }

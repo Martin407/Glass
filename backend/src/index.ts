@@ -69,7 +69,7 @@ const getOktaAudience = (configuredAudience?: string, clientId?: string) =>
 
 const getUser = (c: AppContext): { id: string } => c.get('user');
 
-const isConstraintError = (error: unknown): boolean => {
+export const isConstraintError = (error: unknown): boolean => {
   const candidate = error as { code?: string | number; message?: string; cause?: unknown };
   const cause = candidate?.cause as { code?: string | number } | undefined;
   const codes = [candidate?.code, cause?.code].map((value) => String(value ?? '').toUpperCase());

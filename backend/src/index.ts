@@ -162,20 +162,10 @@ const ensureSessionOwnership = async (c: AppContext, sessionId: string): Promise
 
 const ensureEnvironmentOwnership = async (c: AppContext, environmentId: string): Promise<Response | undefined> => {
   const user = getUser(c);
-  const cacheObj = c.get('cache');
-  const cacheKey = `env_owner_${environmentId}`;
-  let ownerId = cacheObj?.get(cacheKey);
-
-  if (!ownerId) {
-    const owner = await c.env.DB.prepare('SELECT user_id FROM environments WHERE id = ?')
-      .bind(environmentId)
-      .first<{ user_id: string }>();
-    if (owner) {
-      ownerId = owner.user_id;
-      cacheObj?.set(cacheKey, ownerId, 60000);
-    }
-  }
-
+  const owner = await c.env.DB.prepare('SELECT user_id FROM environments WHERE id = ?')
+    .bind(environmentId)
+    .first<{ user_id: string }>();
+  const ownerId = owner?.user_id;
   if (!ownerId || ownerId !== user.id) {
     return c.json({ error: 'Environment not found or unauthorized' }, 403);
   }

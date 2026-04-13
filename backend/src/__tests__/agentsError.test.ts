@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { app } from '../index';
+import { app } from '../index.js';
 
 describe('POST /agents Error Paths', () => {
   beforeEach(() => {

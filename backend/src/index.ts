@@ -181,6 +181,16 @@ app.use('*', async (c, next) => {
   }
 })
 
+export const parseAnthropicError = async (response: Response): Promise<string> => {
+  const errorData = await response.json().catch(() => ({})) as any;
+  return errorData.error?.message || `Anthropic API Error: ${response.status} ${response.statusText}`;
+};
+
+export const handleAnthropicError = async (c: AppContext, response: Response) => {
+  const errorMessage = await parseAnthropicError(response);
+  return c.json({ error: errorMessage }, response.status as any);
+};
+
 const getAnthropicHeaders = (c: AppContext) => {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -211,8 +221,7 @@ const fetchAnthropic = async (c: AppContext, endpoint: string, options: RequestI
     })
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({})) as any;
-      return c.json({ error: errorData.error?.message || `Anthropic API Error: ${response.status} ${response.statusText}` }, response.status as any);
+      return handleAnthropicError(c, response);
     }
 
     // For DELETE operations, response might be empty or specific JSON
@@ -242,8 +251,7 @@ app.post('/agents', async (c) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({})) as any;
-      return c.json({ error: errorData.error?.message || `Anthropic API Error: ${response.status} ${response.statusText}` }, response.status as any);
+      return handleAnthropicError(c, response);
     }
 
     const data: any = await response.json();
@@ -287,8 +295,7 @@ app.get('/agents', async (c) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({})) as any;
-      return c.json({ error: errorData.error?.message || `Anthropic API Error: ${response.status} ${response.statusText}` }, response.status as any);
+      return handleAnthropicError(c, response);
     }
 
     const data: any = await response.json();
@@ -355,8 +362,7 @@ app.post('/sessions', async (c) => {
     })
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({})) as any;
-      return c.json({ error: errorData.error?.message || `Anthropic API Error: ${response.status} ${response.statusText}` }, response.status as any);
+      return handleAnthropicError(c, response);
     }
 
     const data: any = await response.json();
@@ -526,11 +532,11 @@ app.get('/sessions/:session_id/events/stream', async (c) => {
       })
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({})) as any;
+        const errorMessage = await parseAnthropicError(response);
         await stream.writeSSE({
-          data: JSON.stringify({ error: errorData.error?.message || `Error: ${response.status}` }),
+          data: JSON.stringify({ error: errorMessage }),
           event: 'error'
-        })
+        });
         return;
       }
 

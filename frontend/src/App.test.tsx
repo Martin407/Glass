@@ -50,7 +50,7 @@ describe('App Component', () => {
     // Setup agents mock so the button is not disabled
     // In App.tsx listAgents().then(res => setAgents(res))
     vi.mocked(agentsApi.listAgents).mockResolvedValueOnce([
-      { id: 'agent-1', name: 'Test Agent' } as any
+      { id: 'agent-1', name: 'Test Agent', description: '', created_at: '', updated_at: '' }
     ]);
 
     // Setup createSession to fail

@@ -129,10 +129,12 @@ describe('agentsApi', () => {
     });
 
     it('getMcpTools calls GET /api/mcp/tools/:provider', async () => {
-      mockFetchSuccess({ tools: [] });
+      const toolsResponse = { read_only: [], write_delete: [] };
+      mockFetchSuccess(toolsResponse);
 
-      await agentsApi.getMcpTools('google_drive');
+      const result = await agentsApi.getMcpTools('google_drive');
 
+      expect(result).toEqual(toolsResponse);
       expect(global.fetch).toHaveBeenCalledWith('/api/mcp/tools/google_drive', {
         headers: { 'Content-Type': 'application/json' },
       });

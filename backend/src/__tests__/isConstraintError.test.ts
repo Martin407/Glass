@@ -22,11 +22,13 @@ describe('isConstraintError', () => {
   test('returns true when error.code starts with SQLITE_CONSTRAINT', () => {
     assert.strictEqual(isConstraintError({ code: 'SQLITE_CONSTRAINT_UNIQUE' }), true);
     assert.strictEqual(isConstraintError({ code: 'SQLITE_CONSTRAINT_FOREIGNKEY' }), true);
+    assert.strictEqual(isConstraintError({ code: 'sQlItE_cOnStRaInT_check' }), true);
   });
 
   test('returns true when error.cause.code starts with SQLITE_CONSTRAINT', () => {
     assert.strictEqual(isConstraintError({ cause: { code: 'SQLITE_CONSTRAINT_UNIQUE' } }), true);
     assert.strictEqual(isConstraintError({ cause: { code: 'SQLITE_CONSTRAINT_FOREIGNKEY' } }), true);
+    assert.strictEqual(isConstraintError({ cause: { code: 'sqlite_constraint_notnull' } }), true);
   });
 
   test('returns false for irrelevant error codes', () => {

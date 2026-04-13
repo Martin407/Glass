@@ -11,6 +11,7 @@ describe('response cloning', () => {
     if (Array.isArray(data?.data)) {
        data.data = data.data.filter((e: any) => e.id);
     }
+    return data;
   });
 
   bench('without clone', async () => {
@@ -19,5 +20,6 @@ describe('response cloning', () => {
     if (Array.isArray(data?.data)) {
        data.data = data.data.filter((e: any) => e.id);
     }
+    return data;
   });
 });

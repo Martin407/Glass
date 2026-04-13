@@ -181,7 +181,7 @@ app.use('*', async (c, next) => {
 
 export const parseAnthropicError = async (response: Response): Promise<string> => {
   const errorData = await response.json().catch(() => ({})) as any;
-  return errorData?.error?.message || `Anthropic API Error: ${response.status} ${response.statusText}`;
+  return errorData.error?.message || `Anthropic API Error: ${response.status} ${response.statusText}`;
 };
 
 export const handleAnthropicError = async (c: AppContext, response: Response) => {

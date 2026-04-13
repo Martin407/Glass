@@ -22,6 +22,14 @@ describe('cn utility function', () => {
     expect(cn('class1', undefined, null, 'class2')).toBe('class1 class2');
   });
 
+  it('should handle falsy values (false, 0, empty string)', () => {
+    expect(cn('class1', false, 0, '', 'class2')).toBe('class1 class2');
+  });
+
+  it('should handle nested arrays', () => {
+    expect(cn(['class1', ['class2', 'class3']], 'class4')).toBe('class1 class2 class3 class4');
+  });
+
   it('should handle arrays of class names', () => {
     expect(cn(['class1', 'class2'], 'class3')).toBe('class1 class2 class3');
   });

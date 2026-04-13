@@ -1,6 +1,20 @@
 import { useState, useEffect } from 'react';
 import { agentsApi } from './lib/agentsApi';
 import { ChatWindow } from './components/ChatWindow';
+
+interface Agent {
+  id: string;
+  name: string;
+  description: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface McpTool {
+  name: string;
+  description: string;
+  status: string;
+}
 import {
   Search,
   Grid,
@@ -79,14 +93,14 @@ const logApiError = (context: string) => (err: unknown) => {
 function App() {
   const [appState, setAppState] = useState(apps);
   const [selectedProvider, setSelectedProvider] = useState('Slack');
-  const [readOnlyTools, setReadOnlyTools] = useState<any[]>([]);
-  const [writeDeleteTools, setWriteDeleteTools] = useState<any[]>([]);
+  const [readOnlyTools, setReadOnlyTools] = useState<McpTool[]>([]);
+  const [writeDeleteTools, setWriteDeleteTools] = useState<McpTool[]>([]);
   const [activeSessions, setActiveSessions] = useState<{ id: string, x: number, y: number }[]>([]);
-  const [agents, setAgents] = useState<any[]>([]);
+  const [agents, setAgents] = useState<Agent[]>([]);
 
   useEffect(() => {
-    agentsApi.listAgents().then((res: any) => {
-      if (res.data) setAgents(res.data);
+    agentsApi.listAgents().then((res: Agent[]) => {
+      setAgents(res);
     }).catch(logApiError('Failed to list agents'));
   }, []);
 
@@ -101,7 +115,7 @@ function App() {
         ]);
       }
     } catch (err) {
-      console.error('Failed to create session:', err);
+      logApiError('Failed to create session')(err);
     }
   };
 
@@ -110,20 +124,19 @@ function App() {
   };
 
   useEffect(() => {
-    agentsApi.getMcpConnections().then((res: any) => {
+    agentsApi.getMcpConnections().then((res: { connections?: string[] }) => {
       if (res.connections) {
+        const connectionsSet = new Set(res.connections);
         setAppState(prev => prev.map(app => ({
           ...app,
-          connected: res.connections.includes(app.name)
+          connected: connectionsSet.has(app.name)
         })));
       }
     }).catch(logApiError('Failed to get MCP connections'));
   }, []);
 
   useEffect(() => {
-    setReadOnlyTools([]);
-    setWriteDeleteTools([]);
-    agentsApi.getMcpTools(selectedProvider).then((res: any) => {
+    agentsApi.getMcpTools(selectedProvider).then((res: { read_only?: McpTool[], write_delete?: McpTool[] }) => {
       setReadOnlyTools(res.read_only || []);
       setWriteDeleteTools(res.write_delete || []);
     }).catch(logApiError('Failed to get MCP tools'));

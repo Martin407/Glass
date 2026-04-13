@@ -5,6 +5,7 @@ const getErrorMessage = (error: unknown): string => error instanceof Error ? err
 import { RealtimeStateObject } from './durable-object'
 import { Anthropic } from '@anthropic-ai/sdk'
 import { jwtVerify, createRemoteJWKSet } from 'jose'
+import { processSessionStream } from './stream'
 
 export type Bindings = {
   DB: D1Database
@@ -55,16 +56,20 @@ export class TTLMemoryCache {
     }
     this.cache.set(key, { value, expires: Date.now() + ttl });
   }
+
+  delete(key: string): void {
+    this.cache.delete(key);
+  }
 }
 
 type Variables = {
-  user: { id: string }
+  user: { id: string; roles?: string[] }
   cache: TTLMemoryCache
 }
 
 export type AppContext = Context<{ Bindings: Bindings; Variables: Variables }>
 
-const app = new Hono<{ Bindings: Bindings; Variables: Variables }>()
+export const app = new Hono<{ Bindings: Bindings; Variables: Variables }>()
 
 let jwks: ReturnType<typeof createRemoteJWKSet> | undefined;
 let jwksIssuer: string | undefined;
@@ -107,7 +112,7 @@ export const getOktaIssuer = (domain: string, configuredIssuer?: string) => {
   return `https://${normalizeOktaDomain(domain)}/oauth2/default`;
 };
 
-const getOktaAudience = (configuredAudience?: string, clientId?: string) =>
+export const getOktaAudience = (configuredAudience?: string, clientId?: string) =>
   configuredAudience ?? clientId;
 
 const getUser = (c: AppContext): { id: string } => c.get('user');
@@ -238,10 +243,11 @@ app.use('*', async (c, next) => {
   c.set('cache', globalCache);
   if (!c.env.OKTA_DOMAIN) {
     if (c.env.AUTH_BYPASS_FOR_DEV === 'true') {
-      c.set('user', { id: 'user-123' });
+      c.set('user', { id: 'user-123', roles: ['admin'] });
       return await next();
     }
-    return c.json({ error: 'Authentication is misconfigured: OKTA_DOMAIN is required' }, 500);
+    console.error('Authentication is misconfigured: OKTA_DOMAIN is required');
+    return c.json({ error: 'Authentication is misconfigured' }, 500);
   }
 
   let issuer: string;
@@ -249,11 +255,13 @@ app.use('*', async (c, next) => {
     issuer = getOktaIssuer(c.env.OKTA_DOMAIN, c.env.OKTA_ISSUER);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Invalid OKTA auth configuration';
-    return c.json({ error: `Authentication is misconfigured: ${message}` }, 500);
+    console.error(`Authentication is misconfigured: ${message}`, error);
+    return c.json({ error: 'Authentication is misconfigured' }, 500);
   }
   const audience = getOktaAudience(c.env.OKTA_AUDIENCE, c.env.OKTA_CLIENT_ID);
   if (!audience) {
-    return c.json({ error: 'Authentication is misconfigured: OKTA_AUDIENCE or OKTA_CLIENT_ID is required' }, 500);
+    console.error('Authentication is misconfigured: OKTA_AUDIENCE or OKTA_CLIENT_ID is required');
+    return c.json({ error: 'Authentication is misconfigured' }, 500);
   }
 
   const authHeader = c.req.header('Authorization');
@@ -277,7 +285,11 @@ app.use('*', async (c, next) => {
     if (!payload.sub) {
       return c.json({ error: 'Invalid token: missing sub claim' }, 401);
     }
-    c.set('user', { id: payload.sub });
+    const rawRoles = payload.groups ?? payload.roles;
+    const roles: string[] = Array.isArray(rawRoles)
+      ? rawRoles.filter((r): r is string => typeof r === 'string')
+      : [];
+    c.set('user', { id: payload.sub, roles });
     return await next();
   } catch (error: unknown) {
     return c.json({ error: 'Unauthorized' }, 401);
@@ -568,40 +580,7 @@ app.post('/sessions/:session_id/run', async (c) => {
     const sessionStream = await client.beta.sessions.events.stream(sessionId);
 
     return streamSSE(c, async (stream) => {
-      if (events.length > 0) {
-        // Send events asynchronously without awaiting so the stream can start processing them immediately.
-        // Use void to explicitly discard the returned Promise (fire-and-forget with handled rejection).
-        void client.beta.sessions.events.send(sessionId, { events }).catch((err: any) => {
-          console.error('Error sending events to stream:', err);
-          // Abort the session stream so the for-await loop below terminates instead of hanging.
-          sessionStream.controller.abort();
-          stream.writeSSE({
-            data: JSON.stringify({ error: err.message }),
-            event: 'error',
-          }).catch(() => {
-            // Ignore stream write errors if connection already closed
-          });
-        });
-      }
-
-      try {
-        for await (const event of sessionStream) {
-          await stream.writeSSE({
-            data: JSON.stringify(event),
-            event: 'message',
-            id: String(Date.now())
-          });
-        }
-      } catch (err: any) {
-        // If the stream was intentionally aborted (due to events.send failure above),
-        // skip writing a duplicate/misleading error event — the catch above already sent one.
-        if (!sessionStream.controller.signal.aborted) {
-          await stream.writeSSE({
-            data: JSON.stringify({ error: err.message }),
-            event: 'error',
-          });
-        }
-      }
+      await processSessionStream(stream, sessionStream, client, sessionId, events);
     })
   } catch (err: unknown) {
     return c.json({ error: getErrorMessage(err) }, 500)
@@ -823,6 +802,7 @@ app.delete('/environments/:environment_id', async (c) => {
     } catch (err: unknown) {
       console.error('Failed to delete local environment ownership after upstream deletion', err);
     }
+    c.get('cache').delete(`env_owner_${environmentId}`);
   }
   return response;
 })
@@ -866,6 +846,11 @@ app.get('/mcp/tools/:provider', async (c) => {
 
 app.post('/mcp/tools/:provider/:tool_name', async (c) => {
   try {
+    const user = c.get('user');
+    if (!user.roles?.includes('admin')) {
+      return c.json({ error: 'Forbidden: Admin access required' }, 403);
+    }
+
     const provider = c.req.param('provider');
     const tool_name = decodeURIComponent(c.req.param('tool_name'));
     const body = await c.req.json().catch(() => ({}));

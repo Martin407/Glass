@@ -1,47 +1,46 @@
-import { test, describe } from 'node:test';
-import assert from 'node:assert';
+import { describe, it, expect } from 'vitest';
 import { isConstraintError } from '../index.js';
 
 describe('isConstraintError', () => {
-  test('returns true when error.code is string "19"', () => {
-    assert.strictEqual(isConstraintError({ code: '19' }), true);
+  it('returns true when error.code is string "19"', () => {
+    expect(isConstraintError({ code: '19' })).toBe(true);
   });
 
-  test('returns true when error.code is number 19', () => {
-    assert.strictEqual(isConstraintError({ code: 19 }), true);
+  it('returns true when error.code is number 19', () => {
+    expect(isConstraintError({ code: 19 })).toBe(true);
   });
 
-  test('returns true when error.cause.code is "19"', () => {
-    assert.strictEqual(isConstraintError({ cause: { code: '19' } }), true);
+  it('returns true when error.cause.code is "19"', () => {
+    expect(isConstraintError({ cause: { code: '19' } })).toBe(true);
   });
 
-  test('returns true when error.cause.code is 19', () => {
-    assert.strictEqual(isConstraintError({ cause: { code: 19 } }), true);
+  it('returns true when error.cause.code is 19', () => {
+    expect(isConstraintError({ cause: { code: 19 } })).toBe(true);
   });
 
-  test('returns true when error.code starts with SQLITE_CONSTRAINT', () => {
-    assert.strictEqual(isConstraintError({ code: 'SQLITE_CONSTRAINT_UNIQUE' }), true);
-    assert.strictEqual(isConstraintError({ code: 'SQLITE_CONSTRAINT_FOREIGNKEY' }), true);
-    assert.strictEqual(isConstraintError({ code: 'sQlItE_cOnStRaInT_check' }), true);
+  it('returns true when error.code starts with SQLITE_CONSTRAINT', () => {
+    expect(isConstraintError({ code: 'SQLITE_CONSTRAINT_UNIQUE' })).toBe(true);
+    expect(isConstraintError({ code: 'SQLITE_CONSTRAINT_FOREIGNKEY' })).toBe(true);
+    expect(isConstraintError({ code: 'sQlItE_cOnStRaInT_check' })).toBe(true);
   });
 
-  test('returns true when error.cause.code starts with SQLITE_CONSTRAINT', () => {
-    assert.strictEqual(isConstraintError({ cause: { code: 'SQLITE_CONSTRAINT_UNIQUE' } }), true);
-    assert.strictEqual(isConstraintError({ cause: { code: 'SQLITE_CONSTRAINT_FOREIGNKEY' } }), true);
-    assert.strictEqual(isConstraintError({ cause: { code: 'sqlite_constraint_notnull' } }), true);
+  it('returns true when error.cause.code starts with SQLITE_CONSTRAINT', () => {
+    expect(isConstraintError({ cause: { code: 'SQLITE_CONSTRAINT_UNIQUE' } })).toBe(true);
+    expect(isConstraintError({ cause: { code: 'SQLITE_CONSTRAINT_FOREIGNKEY' } })).toBe(true);
+    expect(isConstraintError({ cause: { code: 'sqlite_constraint_notnull' } })).toBe(true);
   });
 
-  test('returns false for irrelevant error codes', () => {
-    assert.strictEqual(isConstraintError({ code: '404' }), false);
-    assert.strictEqual(isConstraintError({ code: 500 }), false);
-    assert.strictEqual(isConstraintError({ cause: { code: 'SQLITE_ERROR' } }), false);
+  it('returns false for irrelevant error codes', () => {
+    expect(isConstraintError({ code: '404' })).toBe(false);
+    expect(isConstraintError({ code: 500 })).toBe(false);
+    expect(isConstraintError({ cause: { code: 'SQLITE_ERROR' } })).toBe(false);
   });
 
-  test('returns false for null, undefined, empty object, or strings', () => {
-    assert.strictEqual(isConstraintError(null), false);
-    assert.strictEqual(isConstraintError(undefined), false);
-    assert.strictEqual(isConstraintError({}), false);
-    assert.strictEqual(isConstraintError('string error'), false);
-    assert.strictEqual(isConstraintError({ message: 'SQLITE_CONSTRAINT' }), false); // only checks code
+  it('returns false for null, undefined, empty object, or strings', () => {
+    expect(isConstraintError(null)).toBe(false);
+    expect(isConstraintError(undefined)).toBe(false);
+    expect(isConstraintError({})).toBe(false);
+    expect(isConstraintError('string error')).toBe(false);
+    expect(isConstraintError({ message: 'SQLITE_CONSTRAINT' })).toBe(false); // only checks code
   });
 });

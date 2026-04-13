@@ -130,3 +130,48 @@ describe('Okta Issuer Configuration', () => {
     });
   });
 });
+
+describe('archiveUpstreamResource', () => {
+  it('should fall back to a specific error string when upstream JSON parsing fails', async () => {
+    const { archiveUpstreamResource } = await import('./index');
+
+    // Create a mock context with user so getAnthropicHeaders won't fail if it requires it
+    const c = {
+      get: (key: string) => {
+        if (key === 'user') return { okta_user_id: 'test-okta-id' };
+        return null;
+      },
+      env: {
+        ANTHROPIC_API_KEY: 'test-api-key'
+      }
+    } as any;
+
+    const originalFetch = globalThis.fetch;
+    const originalConsoleError = console.error;
+
+    try {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 502,
+        json: vi.fn().mockRejectedValue(new Error('Invalid JSON'))
+      });
+
+      console.error = vi.fn();
+
+      await archiveUpstreamResource(c, 'agents', 'agent-123', 'Test error context');
+
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        'https://api.anthropic.com/v1/agents/agent-123/archive',
+        expect.objectContaining({ method: 'POST' })
+      );
+
+      expect(console.error).toHaveBeenCalledWith(
+        'Test error context: upstream archive failed with 502',
+        'Unable to parse upstream archive error response'
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+      console.error = originalConsoleError;
+    }
+  });
+});

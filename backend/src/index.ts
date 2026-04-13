@@ -153,7 +153,7 @@ const ensureEnvironmentOwnership = async (c: AppContext, environmentId: string):
   }
 };
 
-const archiveUpstreamResource = async (
+export const archiveUpstreamResource = async (
   c: AppContext,
   resourceType: 'agents' | 'sessions' | 'environments',
   resourceId: string,

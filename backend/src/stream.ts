@@ -1,5 +1,5 @@
 import type { SSEStreamingApi } from 'hono/streaming'
-import { Anthropic } from '@anthropic-ai/sdk'
+import type { Anthropic } from '@anthropic-ai/sdk'
 
 export const processSessionStream = async (
   stream: SSEStreamingApi,

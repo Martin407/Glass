@@ -180,7 +180,8 @@ app.use('*', async (c, next) => {
       c.set('user', { id: 'user-123' });
       return await next();
     }
-    return c.json({ error: 'Authentication is misconfigured: OKTA_DOMAIN is required' }, 500);
+    console.error('Authentication is misconfigured: OKTA_DOMAIN is required');
+    return c.json({ error: 'Authentication is misconfigured' }, 500);
   }
 
   let issuer: string;
@@ -188,11 +189,13 @@ app.use('*', async (c, next) => {
     issuer = getOktaIssuer(c.env.OKTA_DOMAIN, c.env.OKTA_ISSUER);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Invalid OKTA auth configuration';
-    return c.json({ error: `Authentication is misconfigured: ${message}` }, 500);
+    console.error(`Authentication is misconfigured: ${message}`, error);
+    return c.json({ error: 'Authentication is misconfigured' }, 500);
   }
   const audience = getOktaAudience(c.env.OKTA_AUDIENCE, c.env.OKTA_CLIENT_ID);
   if (!audience) {
-    return c.json({ error: 'Authentication is misconfigured: OKTA_AUDIENCE or OKTA_CLIENT_ID is required' }, 500);
+    console.error('Authentication is misconfigured: OKTA_AUDIENCE or OKTA_CLIENT_ID is required');
+    return c.json({ error: 'Authentication is misconfigured' }, 500);
   }
 
   const authHeader = c.req.header('Authorization');

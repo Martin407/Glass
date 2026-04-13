@@ -722,7 +722,7 @@ app.get('/environments', async (c) => {
       return response;
     }
 
-    const data = await response.clone().json() as any;
+    const data = await response.json() as any;
     if (Array.isArray(data?.data)) {
       data.data = data.data.filter((environment: { id?: string }) => environment.id && ownedEnvironmentIds.has(environment.id));
     } else {

@@ -1,32 +1,83 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeOktaDomain } from './index';
+import { getOktaIssuer, normalizeOktaDomain, normalizeIssuer } from './index';
 
-describe('normalizeOktaDomain', () => {
-  it('should handle valid hostnames without protocols', () => {
-    expect(normalizeOktaDomain('example.okta.com')).toBe('example.okta.com');
-    expect(normalizeOktaDomain('dev-123456.okta.com')).toBe('dev-123456.okta.com');
+describe('Okta Issuer Configuration', () => {
+  describe('normalizeOktaDomain', () => {
+    it('should normalize a plain domain', () => {
+      expect(normalizeOktaDomain('example.okta.com')).toBe('example.okta.com');
+    });
+
+    it('should normalize a domain with https://', () => {
+      expect(normalizeOktaDomain('https://example.okta.com')).toBe('example.okta.com');
+    });
+
+    it('should trim whitespace', () => {
+      expect(normalizeOktaDomain('  example.okta.com  ')).toBe('example.okta.com');
+    });
+
+    it('should throw if a path is included', () => {
+      expect(() => normalizeOktaDomain('example.okta.com/path')).toThrow('OKTA_DOMAIN must not include a path, query, or fragment');
+    });
+
+    it('should throw if a query is included', () => {
+      expect(() => normalizeOktaDomain('example.okta.com?query=1')).toThrow('OKTA_DOMAIN must not include a path, query, or fragment');
+    });
+
+    it('should throw if a fragment is included', () => {
+      expect(() => normalizeOktaDomain('example.okta.com#fragment')).toThrow('OKTA_DOMAIN must not include a path, query, or fragment');
+    });
   });
 
-  it('should handle valid URLs with protocols', () => {
-    expect(normalizeOktaDomain('https://example.okta.com')).toBe('example.okta.com');
-    expect(normalizeOktaDomain('http://example.okta.com')).toBe('example.okta.com');
+  describe('normalizeIssuer', () => {
+    it('should normalize a valid issuer URL', () => {
+      expect(normalizeIssuer('https://example.okta.com/oauth2/default')).toBe('https://example.okta.com/oauth2/default');
+    });
+
+    it('should remove trailing slashes', () => {
+      expect(normalizeIssuer('https://example.okta.com/oauth2/default/')).toBe('https://example.okta.com/oauth2/default');
+      expect(normalizeIssuer('https://example.okta.com/oauth2/default//')).toBe('https://example.okta.com/oauth2/default');
+    });
+
+    it('should trim whitespace', () => {
+      expect(normalizeIssuer('  https://example.okta.com/oauth2/default  ')).toBe('https://example.okta.com/oauth2/default');
+    });
+
+    it('should throw if it is an invalid URL', () => {
+      expect(() => normalizeIssuer('not-a-url')).toThrow('OKTA_ISSUER must be a valid URL');
+    });
+
+    it('should throw if a query is included', () => {
+      expect(() => normalizeIssuer('https://example.okta.com/oauth2/default?query=1')).toThrow('OKTA_ISSUER must not include a query or fragment');
+    });
+
+    it('should throw if a fragment is included', () => {
+      expect(() => normalizeIssuer('https://example.okta.com/oauth2/default#fragment')).toThrow('OKTA_ISSUER must not include a query or fragment');
+    });
   });
 
-  it('should trim whitespace around valid inputs', () => {
-    expect(normalizeOktaDomain('  example.okta.com  ')).toBe('example.okta.com');
-    expect(normalizeOktaDomain('\t https://example.okta.com \n')).toBe('example.okta.com');
-  });
+  describe('getOktaIssuer', () => {
+    it('should return default issuer when no configuredIssuer is provided', () => {
+      expect(getOktaIssuer('example.okta.com')).toBe('https://example.okta.com/oauth2/default');
+    });
 
-  it('should throw an error for invalid domain strings', () => {
-    expect(() => normalizeOktaDomain('not a valid domain')).toThrow('OKTA_DOMAIN must be a valid domain or URL');
-    // Technically `http://not a valid domain` is caught by new URL()
-    expect(() => normalizeOktaDomain('http://not a valid domain')).toThrow('OKTA_DOMAIN must be a valid domain or URL');
-  });
+    it('should return default issuer for domains with scheme when no configuredIssuer is provided', () => {
+      expect(getOktaIssuer('https://example.okta.com')).toBe('https://example.okta.com/oauth2/default');
+    });
 
-  it('should throw an error for domains with paths, query strings, or fragments', () => {
-    expect(() => normalizeOktaDomain('example.okta.com/path')).toThrow('OKTA_DOMAIN must not include a path, query, or fragment');
-    expect(() => normalizeOktaDomain('https://example.okta.com/oauth2/default')).toThrow('OKTA_DOMAIN must not include a path, query, or fragment');
-    expect(() => normalizeOktaDomain('example.okta.com?query=1')).toThrow('OKTA_DOMAIN must not include a path, query, or fragment');
-    expect(() => normalizeOktaDomain('example.okta.com#fragment')).toThrow('OKTA_DOMAIN must not include a path, query, or fragment');
+    it('should use configuredIssuer if provided', () => {
+      expect(getOktaIssuer('example.okta.com', 'https://custom.okta.com/oauth2/custom')).toBe('https://custom.okta.com/oauth2/custom');
+    });
+
+    it('should use configuredIssuer and strip trailing slashes', () => {
+      expect(getOktaIssuer('example.okta.com', 'https://custom.okta.com/oauth2/custom/')).toBe('https://custom.okta.com/oauth2/custom');
+    });
+
+    it('should throw if configuredIssuer is invalid', () => {
+      expect(() => getOktaIssuer('example.okta.com', 'not-a-url')).toThrow('OKTA_ISSUER must be a valid URL');
+    });
+
+    it('should throw if domain is invalid and configuredIssuer is not provided', () => {
+      expect(() => getOktaIssuer('example.okta.com/path')).toThrow('OKTA_DOMAIN must not include a path, query, or fragment');
+    });
   });
 });

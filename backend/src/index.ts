@@ -4,7 +4,7 @@ import { RealtimeStateObject } from './durable-object'
 import { Anthropic } from '@anthropic-ai/sdk'
 import { jwtVerify, createRemoteJWKSet } from 'jose'
 
-type Bindings = {
+export type Bindings = {
   DB: D1Database
   REALTIME_STATE: DurableObjectNamespace
   ANTHROPIC_API_KEY?: string
@@ -69,7 +69,7 @@ const getOktaAudience = (configuredAudience?: string, clientId?: string) =>
 
 const getUser = (c: AppContext): { id: string } => c.get('user');
 
-const isConstraintError = (error: unknown): boolean => {
+export const isConstraintError = (error: unknown): boolean => {
   const candidate = error as { code?: string | number; message?: string; cause?: unknown };
   const cause = candidate?.cause as { code?: string | number } | undefined;
   const codes = [candidate?.code, cause?.code].map((value) => String(value ?? '').toUpperCase());
@@ -168,7 +168,7 @@ app.use('*', async (c, next) => {
   }
 })
 
-const getAnthropicHeaders = (c: any) => {
+const getAnthropicHeaders = (c: AppContext) => {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'anthropic-version': '2023-06-01',
@@ -184,7 +184,7 @@ const getAnthropicHeaders = (c: any) => {
   return headers
 }
 
-const fetchAnthropic = async (c: any, endpoint: string, options: RequestInit = {}) => {
+const fetchAnthropic = async (c: AppContext, endpoint: string, options: RequestInit = {}) => {
   if (!c.env.ANTHROPIC_API_KEY) {
     return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 500);
   }

@@ -1,93 +1,154 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, Mock } from 'vitest';
 import { agentsApi } from './agentsApi';
 
 describe('agentsApi', () => {
   let originalFetch: typeof global.fetch;
+  let originalEventSource: typeof global.EventSource;
 
   beforeEach(() => {
     originalFetch = global.fetch;
+    originalEventSource = global.EventSource;
     global.fetch = vi.fn();
   });
 
   afterEach(() => {
     global.fetch = originalFetch;
-    vi.restoreAllMocks();
+    global.EventSource = originalEventSource;
+    vi.clearAllMocks();
   });
 
-  describe('runSession', () => {
-    it('throws an error with status and text when response is not ok', async () => {
-      const mockSessionId = 'session-123';
-      const mockMessage = 'hello';
+  const mockFetchSuccess = (data: any) => {
+    (global.fetch as Mock).mockResolvedValueOnce({
+      ok: true,
+      json: async () => data,
+    });
+  };
 
-      const mockErrorResponse = {
-        ok: false,
-        status: 400,
-        text: vi.fn().mockResolvedValue('Bad Request'),
-      } as unknown as Response;
+  const mockFetchError = (status: number, text: string) => {
+    (global.fetch as Mock).mockResolvedValueOnce({
+      ok: false,
+      status,
+      text: async () => text,
+    });
+  };
 
-      vi.mocked(global.fetch).mockResolvedValueOnce(mockErrorResponse);
+  describe('fetchApi helper implicitly tested via endpoints', () => {
+    it('throws correct API error on non-ok response', async () => {
+      mockFetchError(400, 'Bad Request Data');
 
-      await expect(agentsApi.runSession(mockSessionId, mockMessage)).rejects.toThrow(
-        'API error: 400 - Bad Request'
-      );
+      await expect(agentsApi.listAgents()).rejects.toThrow('API error: 400 - Bad Request Data');
+    });
 
-      expect(global.fetch).toHaveBeenCalledWith(`/api/sessions/${mockSessionId}/run`, expect.objectContaining({
+    it('returns parsed JSON on success', async () => {
+      const mockData = [{ id: '1', name: 'Agent 1' }];
+      mockFetchSuccess(mockData);
+
+      const result = await agentsApi.listAgents();
+      expect(result).toEqual(mockData);
+    });
+  });
+
+  describe('Agent endpoints', () => {
+    it('createAgent calls POST /api/agents with data', async () => {
+      mockFetchSuccess({ id: '1' });
+      const data = { name: 'New Agent' };
+
+      await agentsApi.createAgent(data);
+
+      expect(global.fetch).toHaveBeenCalledWith('/api/agents', {
+        method: 'POST',
+        body: JSON.stringify(data),
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+
+    it('listAgents calls GET /api/agents', async () => {
+      mockFetchSuccess([]);
+
+      await agentsApi.listAgents();
+
+      expect(global.fetch).toHaveBeenCalledWith('/api/agents', {
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+
+    it('getAgent calls GET /api/agents/:id', async () => {
+      mockFetchSuccess({ id: '1' });
+
+      await agentsApi.getAgent('1');
+
+      expect(global.fetch).toHaveBeenCalledWith('/api/agents/1', {
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+
+    it('updateAgent calls POST /api/agents/:id with data', async () => {
+      mockFetchSuccess({ id: '1' });
+      const data = { name: 'Updated Agent' };
+
+      await agentsApi.updateAgent('1', data);
+
+      expect(global.fetch).toHaveBeenCalledWith('/api/agents/1', {
+        method: 'POST',
+        body: JSON.stringify(data),
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+
+    it('archiveAgent calls POST /api/agents/:id/archive', async () => {
+      mockFetchSuccess({ success: true });
+
+      await agentsApi.archiveAgent('1');
+
+      expect(global.fetch).toHaveBeenCalledWith('/api/agents/1/archive', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: mockMessage }),
-      }));
+      });
     });
 
-    it('returns response when successful', async () => {
-      const mockSessionId = 'session-123';
-      const mockMessage = 'hello';
+    it('getAgentVersions calls GET /api/agents/:id/versions', async () => {
+      mockFetchSuccess([{ version: 1 }]);
 
-      const mockSuccessResponse = {
-        ok: true,
-        status: 200,
-      } as unknown as Response;
+      await agentsApi.getAgentVersions('1');
 
-      vi.mocked(global.fetch).mockResolvedValueOnce(mockSuccessResponse);
-
-      const response = await agentsApi.runSession(mockSessionId, mockMessage);
-
-      expect(response).toBe(mockSuccessResponse);
-      expect(global.fetch).toHaveBeenCalledWith(`/api/sessions/${mockSessionId}/run`, expect.objectContaining({
-        method: 'POST',
+      expect(global.fetch).toHaveBeenCalledWith('/api/agents/1/versions', {
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: mockMessage }),
-      }));
+      });
     });
   });
 
-  describe('fetchApi wrappers', () => {
-    it('throws an error with status and text when response is not ok', async () => {
-      const mockErrorResponse = {
-        ok: false,
-        status: 500,
-        text: vi.fn().mockResolvedValue('Internal Server Error'),
-      } as unknown as Response;
-
-      vi.mocked(global.fetch).mockResolvedValueOnce(mockErrorResponse);
-
-      await expect(agentsApi.listAgents()).rejects.toThrow(
-        'API error: 500 - Internal Server Error'
-      );
-    });
-
-    it('returns json when successful', async () => {
-      const mockData = { agents: [] };
-      const mockSuccessResponse = {
+  describe('Session endpoints', () => {
+    it('runSession calls POST /api/sessions/:sessionId/run', async () => {
+      // runSession does not parse json immediately, returns response directly
+      (global.fetch as Mock).mockResolvedValueOnce({
         ok: true,
-        status: 200,
-        json: vi.fn().mockResolvedValue(mockData),
-      } as unknown as Response;
+        json: async () => ({}), // dummy
+      });
+      const message = 'Hello';
 
-      vi.mocked(global.fetch).mockResolvedValueOnce(mockSuccessResponse);
+      await agentsApi.runSession('s1', message);
 
-      const response = await agentsApi.listAgents();
+      expect(global.fetch).toHaveBeenCalledWith('/api/sessions/s1/run', {
+        method: 'POST',
+        body: JSON.stringify({ message }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
 
-      expect(response).toEqual(mockData);
+    it('runSession throws error if response is not ok', async () => {
+      mockFetchError(500, 'Internal Server Error');
+
+      await expect(agentsApi.runSession('s1', 'Hello')).rejects.toThrow('API error: 500 - Internal Server Error');
+    });
+
+    it('streamSessionEvents creates EventSource with correct URL', () => {
+      const mockEventSource = vi.fn();
+      global.EventSource = mockEventSource as any;
+
+      agentsApi.streamSessionEvents('s1');
+
+      expect(mockEventSource).toHaveBeenCalledWith('/api/sessions/s1/events/stream');
     });
   });
+
 });

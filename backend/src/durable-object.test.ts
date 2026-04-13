@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest'
 import { RealtimeStateObject } from './durable-object'
 
 // Setup global Mock for WebSocketPair
@@ -16,14 +16,7 @@ class MockWebSocket {
   close = vi.fn()
 }
 
-// We add it to globalThis to satisfy the environment
-// We'll also define it properly for TypeScript
-declare global {
-  var WebSocketPair: any
-  var Response: any
-}
-
-globalThis.WebSocketPair = class {
+class MockWebSocketPair {
   constructor() {
     return {
       0: new MockWebSocket(), // client
@@ -32,13 +25,15 @@ globalThis.WebSocketPair = class {
   }
 }
 
+// Capture the original Response before stubbing so MockResponse can extend it
+const OriginalResponse = (globalThis as any).Response as typeof Response
+
 // We need to mock Response because the native Response object
 // doesn't allow a 101 status code by default in Node.js/Vitest
-const OriginalResponse = globalThis.Response
-globalThis.Response = class extends OriginalResponse {
+class MockResponse extends OriginalResponse {
   constructor(body?: BodyInit | null, init?: ResponseInit) {
     if (init?.status === 101) {
-      // Create a fake Response for 101 status to bypass RangeError
+      // Bypass RangeError for status 101 by constructing with 200, then overriding
       super(body, { ...init, status: 200 })
       Object.defineProperty(this, 'status', { value: 101 })
       Object.defineProperty(this, 'webSocket', { value: (init as any).webSocket })
@@ -46,7 +41,16 @@ globalThis.Response = class extends OriginalResponse {
       super(body, init)
     }
   }
-} as any
+}
+
+beforeAll(() => {
+  vi.stubGlobal('WebSocketPair', MockWebSocketPair)
+  vi.stubGlobal('Response', MockResponse)
+})
+
+afterAll(() => {
+  vi.unstubAllGlobals()
+})
 
 describe('RealtimeStateObject', () => {
   describe('fetch', () => {
@@ -96,7 +100,6 @@ describe('RealtimeStateObject', () => {
       const response = await ro.fetch(request)
       expect(response.status).toBe(101)
 
-      const client = (response as any).webSocket
       // Need to find the server websocket to trigger the event
       const server = Array.from(ro.sessions)[0] as unknown as MockWebSocket
 

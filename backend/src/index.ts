@@ -29,7 +29,7 @@ let jwksIssuer: string | undefined;
 // SQLite SQLITE_CONSTRAINT error code.
 const SQLITE_CONSTRAINT_ERROR_CODE = '19';
 
-const normalizeOktaDomain = (domain: string): string => {
+export const normalizeOktaDomain = (domain: string): string => {
   const trimmedDomain = domain.trim();
   let parsedUrl: URL;
   try {
@@ -43,7 +43,7 @@ const normalizeOktaDomain = (domain: string): string => {
   return parsedUrl.host;
 };
 
-const normalizeIssuer = (configuredIssuer: string): string => {
+export const normalizeIssuer = (configuredIssuer: string): string => {
   let parsedUrl: URL;
   try {
     parsedUrl = new URL(configuredIssuer.trim());

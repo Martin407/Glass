@@ -29,6 +29,15 @@ describe('Anthropic Error Handling Utilities', () => {
       const result = await parseAnthropicError(response);
       expect(result).toBe('Anthropic API Error: 403 Forbidden');
     });
+
+    it('should fallback to status info if JSON body is null', async () => {
+      const response = new Response('null', {
+        status: 404,
+        statusText: 'Not Found'
+      });
+      const result = await parseAnthropicError(response);
+      expect(result).toBe('Anthropic API Error: 404 Not Found');
+    });
   });
 
   describe('handleAnthropicError', () => {

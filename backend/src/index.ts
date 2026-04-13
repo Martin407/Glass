@@ -66,7 +66,7 @@ export const getOktaIssuer = (domain: string, configuredIssuer?: string) => {
   return `https://${normalizeOktaDomain(domain)}/oauth2/default`;
 };
 
-const getOktaAudience = (configuredAudience?: string, clientId?: string) =>
+export const getOktaAudience = (configuredAudience?: string, clientId?: string) =>
   configuredAudience ?? clientId;
 
 const getUser = (c: AppContext): { id: string } => c.get('user');

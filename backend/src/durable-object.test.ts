@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest'
 import { RealtimeStateObject } from './durable-object'
+import type { Bindings } from './index'
 
 // Setup global Mock for WebSocketPair
 class MockWebSocket {
@@ -56,7 +57,7 @@ describe('RealtimeStateObject', () => {
   describe('fetch', () => {
     it('should return 426 if Upgrade header is not websocket', async () => {
       const state = { acceptWebSocket: vi.fn() } as unknown as DurableObjectState
-      const env = {} as any as any
+      const env = {}
       const ro = new RealtimeStateObject(state, env)
 
       const request = new Request('http://localhost/', {
@@ -70,7 +71,7 @@ describe('RealtimeStateObject', () => {
 
     it('should handle websocket upgrade request correctly', async () => {
       const state = { acceptWebSocket: vi.fn() } as unknown as DurableObjectState
-      const env = {} as any
+      const env = {}
       const ro = new RealtimeStateObject(state, env)
 
       const request = new Request('http://localhost/', {
@@ -87,7 +88,7 @@ describe('RealtimeStateObject', () => {
 
     it('should broadcast update when server receives message', async () => {
       const state = { acceptWebSocket: vi.fn() } as unknown as DurableObjectState
-      const env = {} as any
+      const env = {}
       const ro = new RealtimeStateObject(state, env)
 
       // We spy on broadcast
@@ -119,7 +120,7 @@ describe('RealtimeStateObject', () => {
 
     it('should remove session when server receives close event', async () => {
       const state = { acceptWebSocket: vi.fn() } as unknown as DurableObjectState
-      const env = {} as any
+      const env = {}
       const ro = new RealtimeStateObject(state, env)
 
       const request = new Request('http://localhost/', {
@@ -144,7 +145,7 @@ describe('RealtimeStateObject', () => {
     it('should send a message to all connected sessions', () => {
       // Mock DurableObjectState and env
       const state = {} as DurableObjectState
-      const env = {} as any
+      const env = {} as unknown as Bindings
 
       const ro = new RealtimeStateObject(state, env)
 
@@ -166,7 +167,7 @@ describe('RealtimeStateObject', () => {
     it('should remove sessions that throw an error during send', () => {
       // Mock DurableObjectState and env
       const state = {} as DurableObjectState
-      const env = {} as any
+      const env = {} as unknown as Bindings
 
       const ro = new RealtimeStateObject(state, env)
 

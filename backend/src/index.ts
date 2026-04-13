@@ -22,9 +22,9 @@ type Variables = {
   user: { id: string; roles?: string[] }
 }
 
-type AppContext = Context<{ Bindings: Bindings; Variables: Variables }>
+export type AppContext = Context<{ Bindings: Bindings; Variables: Variables }>
 
-const app = new Hono<{ Bindings: Bindings; Variables: Variables }>()
+export const app = new Hono<{ Bindings: Bindings; Variables: Variables }>()
 
 let jwks: ReturnType<typeof createRemoteJWKSet> | undefined;
 let jwksIssuer: string | undefined;
@@ -78,6 +78,38 @@ export const isConstraintError = (error: unknown): boolean => {
   return codes.includes(SQLITE_CONSTRAINT_ERROR_CODE) || codes.some((code) => code.startsWith('SQLITE_CONSTRAINT'));
 };
 
+export class LRUCache<K, V> {
+  private maxSize: number;
+  private cache: Map<K, V>;
+
+  constructor(maxSize: number) {
+    this.maxSize = maxSize;
+    this.cache = new Map<K, V>();
+  }
+
+  get(key: K): V | undefined {
+    if (!this.cache.has(key)) return undefined;
+    const val = this.cache.get(key)!;
+    this.cache.delete(key);
+    this.cache.set(key, val);
+    return val;
+  }
+
+  set(key: K, value: V): void {
+    if (this.cache.has(key)) {
+      this.cache.delete(key);
+    } else if (this.cache.size >= this.maxSize) {
+      const firstKey = this.cache.keys().next().value;
+      if (firstKey !== undefined) {
+        this.cache.delete(firstKey);
+      }
+    }
+    this.cache.set(key, value);
+  }
+}
+
+export const sessionOwnershipCache = new LRUCache<string, string>(1000);
+
 const ensureAgentOwnership = async (c: AppContext, agentId: string): Promise<Response | undefined> => {
   const user = getUser(c);
   const owner = await c.env.DB.prepare('SELECT user_id FROM agents WHERE id = ?')
@@ -89,13 +121,23 @@ const ensureAgentOwnership = async (c: AppContext, agentId: string): Promise<Res
   }
 };
 
-const ensureSessionOwnership = async (c: AppContext, sessionId: string): Promise<Response | undefined> => {
+export const ensureSessionOwnership = async (c: AppContext, sessionId: string): Promise<Response | undefined> => {
   const user = getUser(c);
-  const owner = await c.env.DB.prepare('SELECT user_id FROM sessions WHERE id = ?')
-    .bind(sessionId)
-    .first<{ user_id: string }>();
 
-  if (!owner || owner.user_id !== user.id) {
+  let ownerUserId = sessionOwnershipCache.get(sessionId);
+
+  if (ownerUserId === undefined) {
+    const owner = await c.env.DB.prepare('SELECT user_id FROM sessions WHERE id = ?')
+      .bind(sessionId)
+      .first<{ user_id: string }>();
+
+    if (owner) {
+      ownerUserId = owner.user_id;
+      sessionOwnershipCache.set(sessionId, ownerUserId);
+    }
+  }
+
+  if (ownerUserId === undefined || ownerUserId !== user.id) {
     return c.json({ error: 'Session not found or unauthorized' }, 403);
   }
 };
@@ -138,7 +180,8 @@ app.use('*', async (c, next) => {
       c.set('user', { id: 'user-123', roles: ['admin'] });
       return await next();
     }
-    return c.json({ error: 'Authentication is misconfigured: OKTA_DOMAIN is required' }, 500);
+    console.error('Authentication is misconfigured: OKTA_DOMAIN is required');
+    return c.json({ error: 'Authentication is misconfigured' }, 500);
   }
 
   let issuer: string;
@@ -146,11 +189,13 @@ app.use('*', async (c, next) => {
     issuer = getOktaIssuer(c.env.OKTA_DOMAIN, c.env.OKTA_ISSUER);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Invalid OKTA auth configuration';
-    return c.json({ error: `Authentication is misconfigured: ${message}` }, 500);
+    console.error(`Authentication is misconfigured: ${message}`, error);
+    return c.json({ error: 'Authentication is misconfigured' }, 500);
   }
   const audience = getOktaAudience(c.env.OKTA_AUDIENCE, c.env.OKTA_CLIENT_ID);
   if (!audience) {
-    return c.json({ error: 'Authentication is misconfigured: OKTA_AUDIENCE or OKTA_CLIENT_ID is required' }, 500);
+    console.error('Authentication is misconfigured: OKTA_AUDIENCE or OKTA_CLIENT_ID is required');
+    return c.json({ error: 'Authentication is misconfigured' }, 500);
   }
 
   const authHeader = c.req.header('Authorization');
@@ -174,7 +219,10 @@ app.use('*', async (c, next) => {
     if (!payload.sub) {
       return c.json({ error: 'Invalid token: missing sub claim' }, 401);
     }
-    const roles = (payload.groups || payload.roles || []) as string[];
+    const rawRoles = payload.groups ?? payload.roles;
+    const roles: string[] = Array.isArray(rawRoles)
+      ? rawRoles.filter((r): r is string => typeof r === 'string')
+      : [];
     c.set('user', { id: payload.sub, roles });
     return await next();
   } catch (error: unknown) {
@@ -681,7 +729,7 @@ app.get('/environments', async (c) => {
       return response;
     }
 
-    const data = await response.clone().json() as any;
+    const data = await response.json() as any;
     if (Array.isArray(data?.data)) {
       data.data = data.data.filter((environment: { id?: string }) => environment.id && ownedEnvironmentIds.has(environment.id));
     } else {

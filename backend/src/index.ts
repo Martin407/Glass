@@ -309,7 +309,7 @@ app.post('/agents', async (c) => {
         await c.env.DB.prepare('INSERT INTO agents (id, user_id) VALUES (?, ?)')
           .bind(data.id, user.id)
           .run();
-      } catch (err: any) {
+      } catch (err: unknown) {
         await archiveUpstreamResource(c, 'agents', data.id, 'Failed to persist local agent ownership after upstream create');
         if (isConstraintError(err)) {
           return c.json({ error: 'Agent already exists' }, 409);
@@ -422,7 +422,7 @@ app.post('/sessions', async (c) => {
         await c.env.DB.prepare('INSERT INTO sessions (id, user_id) VALUES (?, ?)')
           .bind(data.id, user.id)
           .run()
-      } catch (err: any) {
+      } catch (err: unknown) {
         await archiveUpstreamResource(c, 'sessions', data.id, 'Failed to persist local session ownership after upstream create');
         if (isConstraintError(err)) {
           return c.json({ error: 'Failed to store session mapping due to a session ID conflict.' }, 409);
@@ -517,12 +517,12 @@ app.post('/sessions/:session_id/run', async (c) => {
       if (events.length > 0) {
         // Send events asynchronously without awaiting so the stream can start processing them immediately.
         // Use void to explicitly discard the returned Promise (fire-and-forget with handled rejection).
-        void client.beta.sessions.events.send(sessionId, { events }).catch((err: any) => {
+        void client.beta.sessions.events.send(sessionId, { events }).catch((err: unknown) => {
           console.error('Error sending events to stream:', err);
           // Abort the session stream so the for-await loop below terminates instead of hanging.
           sessionStream.controller.abort();
           stream.writeSSE({
-            data: JSON.stringify({ error: err.message }),
+            data: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }),
             event: 'error',
           }).catch(() => {
             // Ignore stream write errors if connection already closed
@@ -538,12 +538,12 @@ app.post('/sessions/:session_id/run', async (c) => {
             id: String(Date.now())
           });
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         // If the stream was intentionally aborted (due to events.send failure above),
         // skip writing a duplicate/misleading error event — the catch above already sent one.
         if (!sessionStream.controller.signal.aborted) {
           await stream.writeSSE({
-            data: JSON.stringify({ error: err.message }),
+            data: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }),
             event: 'error',
           });
         }
@@ -614,15 +614,15 @@ app.get('/sessions/:session_id/events/stream', async (c) => {
                 event: 'message',
                 id: String(Date.now())
               });
-            } catch (e) {
+            } catch {
               // ignore parse errors for partial chunks
             }
           }
         }
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       await stream.writeSSE({
-        data: JSON.stringify({ error: err.message }),
+        data: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }),
         event: 'error',
       })
     }
@@ -693,7 +693,7 @@ app.post('/environments', async (c) => {
         await c.env.DB.prepare('INSERT INTO environments (id, user_id) VALUES (?, ?)')
           .bind(data.id, user.id)
           .run();
-      } catch (err: any) {
+      } catch (err: unknown) {
         await archiveUpstreamResource(c, 'environments', data.id, 'Failed to persist local environment ownership after upstream create');
         if (isConstraintError(err)) {
           return c.json({ error: 'Environment already exists' }, 409);

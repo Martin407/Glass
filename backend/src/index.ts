@@ -47,7 +47,7 @@ class TTLMemoryCache {
       if (this.cache.size >= this.maxSize) {
         const firstKey = this.cache.keys().next().value;
         if (firstKey !== undefined) {
-            this.cache.delete(firstKey);
+          this.cache.delete(firstKey);
         }
       }
     }

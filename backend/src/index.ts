@@ -785,6 +785,9 @@ app.post('/environments/:environment_id/archive', async (c) => {
 app.get('/mcp/connections', async (c) => {
   try {
     const user = c.get('user');
+    if (!user.roles?.includes('admin')) {
+      return c.json({ error: 'Forbidden: Admin access required' }, 403);
+    }
     const { results } = await c.env.DB.prepare('SELECT DISTINCT provider FROM oauth_tokens WHERE user_id = ?').bind(user.id).all();
     return c.json({ connections: results.map(r => r.provider) });
   } catch (error: unknown) {
@@ -794,6 +797,10 @@ app.get('/mcp/connections', async (c) => {
 
 app.get('/mcp/tools/:provider', async (c) => {
   try {
+    const user = c.get('user');
+    if (!user.roles?.includes('admin')) {
+      return c.json({ error: 'Forbidden: Admin access required' }, 403);
+    }
     const provider = c.req.param('provider');
     const { results } = await c.env.DB.prepare('SELECT tool_name, type, permission FROM global_tool_permissions WHERE provider = ?').bind(provider).all();
 

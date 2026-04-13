@@ -154,8 +154,6 @@ export class LRUCache<K, V> {
   }
 }
 
-export const sessionOwnershipCache = new LRUCache<string, string>(1000);
-
 const ensureAgentOwnership = async (c: AppContext, agentId: string): Promise<Response | undefined> => {
   const user = getUser(c);
   const cacheObj = c.get('cache');
@@ -180,6 +178,21 @@ const ensureAgentOwnership = async (c: AppContext, agentId: string): Promise<Res
 
 export const ensureSessionOwnership = async (c: AppContext, sessionId: string): Promise<Response | undefined> => {
   const user = getUser(c);
+  const cacheObj = c.get('cache');
+  const cacheKey = `session_owner_${sessionId}`;
+  let ownerId = cacheObj?.get(cacheKey);
+
+  if (!ownerId) {
+    const owner = await c.env.DB.prepare('SELECT user_id FROM sessions WHERE id = ?')
+      .bind(sessionId)
+      .first<{ user_id: string }>();
+    if (owner) {
+      ownerId = owner.user_id;
+      cacheObj?.set(cacheKey, ownerId, 60000);
+    }
+  }
+
+  if (!ownerId || ownerId !== user.id) {
 
   let ownerUserId = sessionOwnershipCache.get(sessionId);
 

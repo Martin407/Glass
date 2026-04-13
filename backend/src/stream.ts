@@ -29,7 +29,7 @@ export const processSessionStream = async (
   }
 
   try {
-    for await (const event of typedStream) {
+    for await (const event of sessionStream) {
       await stream.writeSSE({
         data: JSON.stringify(event),
         event: 'message',

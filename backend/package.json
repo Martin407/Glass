@@ -12,7 +12,9 @@
     "jose": "^6.2.2"
   },
   "devDependencies": {
+    "@types/node": "^25.6.0",
     "typescript": "^6.0.2",
+    "vitest": "^4.1.4",
     "wrangler": "^4.4.0"
   }
 }

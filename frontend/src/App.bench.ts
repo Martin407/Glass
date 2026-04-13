@@ -8,7 +8,7 @@ const connections = Array.from({ length: m }, (_, i) => `App${i * 2}`);
 
 describe('App connections optimization', () => {
   bench('baseline: includes', () => {
-    return prev.map(app => ({
+    prev.map(app => ({
       ...app,
       connected: connections.includes(app.name)
     }));
@@ -16,7 +16,7 @@ describe('App connections optimization', () => {
 
   bench('optimized: Set', () => {
     const connectionsSet = new Set(connections);
-    return prev.map(app => ({
+    prev.map(app => ({
       ...app,
       connected: connectionsSet.has(app.name)
     }));

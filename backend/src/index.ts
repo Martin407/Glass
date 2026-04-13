@@ -622,7 +622,7 @@ app.get('/sessions/:session_id/events/stream', async (c) => {
       }
     } catch (err: unknown) {
       await stream.writeSSE({
-        data: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }),
+        data: JSON.stringify({ error: getErrorMessage(err) }),
         event: 'error',
       })
     }

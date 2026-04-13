@@ -99,8 +99,8 @@ function App() {
   const [agents, setAgents] = useState<Agent[]>([]);
 
   useEffect(() => {
-    agentsApi.listAgents().then((res: { data?: Agent[] }) => {
-      if (res.data) setAgents(res.data);
+    agentsApi.listAgents().then((res: Agent[]) => {
+      setAgents(res);
     }).catch(logApiError('Failed to list agents'));
   }, []);
 

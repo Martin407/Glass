@@ -193,6 +193,21 @@ export const ensureSessionOwnership = async (c: AppContext, sessionId: string): 
   }
 
   if (!ownerId || ownerId !== user.id) {
+
+  let ownerUserId = sessionOwnershipCache.get(sessionId);
+
+  if (ownerUserId === undefined) {
+    const owner = await c.env.DB.prepare('SELECT user_id FROM sessions WHERE id = ?')
+      .bind(sessionId)
+      .first<{ user_id: string }>();
+
+    if (owner) {
+      ownerUserId = owner.user_id;
+      sessionOwnershipCache.set(sessionId, ownerUserId);
+    }
+  }
+
+  if (ownerUserId === undefined || ownerUserId !== user.id) {
     return c.json({ error: 'Session not found or unauthorized' }, 403);
   }
 };
@@ -762,7 +777,7 @@ app.get('/environments', async (c) => {
       return response;
     }
 
-    const data = await response.clone().json() as any;
+    const data = await response.json() as any;
     if (Array.isArray(data?.data)) {
       data.data = data.data.filter((environment: { id?: string }) => environment.id && ownedEnvironmentIds.has(environment.id));
     } else {

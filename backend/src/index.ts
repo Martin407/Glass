@@ -5,6 +5,7 @@ const getErrorMessage = (error: unknown): string => error instanceof Error ? err
 import { RealtimeStateObject } from './durable-object'
 import { Anthropic } from '@anthropic-ai/sdk'
 import { jwtVerify, createRemoteJWKSet } from 'jose'
+import { processSessionStream } from './stream'
 
 export type Bindings = {
   DB: D1Database
@@ -18,8 +19,52 @@ export type Bindings = {
   AUTH_BYPASS_FOR_DEV?: string
 }
 
+export class TTLMemoryCache {
+  private cache = new Map<string, { value: string; expires: number }>();
+  private readonly maxSize: number;
+
+  constructor(maxSize: number = 1000) {
+    this.maxSize = maxSize;
+  }
+
+  get(key: string): string | undefined {
+    const item = this.cache.get(key);
+    if (!item) return undefined;
+    if (Date.now() > item.expires) {
+      this.cache.delete(key);
+      return undefined;
+    }
+    return item.value;
+  }
+
+  set(key: string, value: string, ttl: number) {
+    if (this.cache.size >= this.maxSize) {
+      // Lazy eviction for space: delete the first expired item found,
+      // or simply the first item (oldest inserted) if none are expired.
+      for (const [k, v] of this.cache.entries()) {
+        if (Date.now() > v.expires) {
+          this.cache.delete(k);
+          break;
+        }
+      }
+      if (this.cache.size >= this.maxSize) {
+        const firstKey = this.cache.keys().next().value;
+        if (firstKey !== undefined) {
+            this.cache.delete(firstKey);
+        }
+      }
+    }
+    this.cache.set(key, { value, expires: Date.now() + ttl });
+  }
+
+  delete(key: string): void {
+    this.cache.delete(key);
+  }
+}
+
 type Variables = {
   user: { id: string; roles?: string[] }
+  cache: TTLMemoryCache
 }
 
 export type AppContext = Context<{ Bindings: Bindings; Variables: Variables }>
@@ -28,6 +73,7 @@ export const app = new Hono<{ Bindings: Bindings; Variables: Variables }>()
 
 let jwks: ReturnType<typeof createRemoteJWKSet> | undefined;
 let jwksIssuer: string | undefined;
+const globalCache = new TTLMemoryCache();
 // SQLite SQLITE_CONSTRAINT error code.
 const SQLITE_CONSTRAINT_ERROR_CODE = '19';
 
@@ -66,7 +112,7 @@ export const getOktaIssuer = (domain: string, configuredIssuer?: string) => {
   return `https://${normalizeOktaDomain(domain)}/oauth2/default`;
 };
 
-const getOktaAudience = (configuredAudience?: string, clientId?: string) =>
+export const getOktaAudience = (configuredAudience?: string, clientId?: string) =>
   configuredAudience ?? clientId;
 
 const getUser = (c: AppContext): { id: string } => c.get('user');
@@ -112,11 +158,22 @@ export const sessionOwnershipCache = new LRUCache<string, string>(1000);
 
 const ensureAgentOwnership = async (c: AppContext, agentId: string): Promise<Response | undefined> => {
   const user = getUser(c);
-  const owner = await c.env.DB.prepare('SELECT user_id FROM agents WHERE id = ?')
-    .bind(agentId)
-    .first<{ user_id: string }>();
+  const cacheObj = c.get('cache');
+  const cacheKey = `agent_owner_${agentId}`;
+  let ownerId = cacheObj?.get(cacheKey);
 
-  if (!owner || owner.user_id !== user.id) {
+  if (!ownerId) {
+    const owner = await c.env.DB.prepare('SELECT user_id FROM agents WHERE id = ?')
+      .bind(agentId)
+      .first<{ user_id: string }>();
+    if (owner) {
+      ownerId = owner.user_id;
+      // Cache ownership check for 1 minute (60,000 ms)
+      cacheObj?.set(cacheKey, ownerId, 60000);
+    }
+  }
+
+  if (!ownerId || ownerId !== user.id) {
     return c.json({ error: 'Agent not found or unauthorized' }, 403);
   }
 };
@@ -144,11 +201,21 @@ export const ensureSessionOwnership = async (c: AppContext, sessionId: string): 
 
 const ensureEnvironmentOwnership = async (c: AppContext, environmentId: string): Promise<Response | undefined> => {
   const user = getUser(c);
-  const owner = await c.env.DB.prepare('SELECT user_id FROM environments WHERE id = ?')
-    .bind(environmentId)
-    .first<{ user_id: string }>();
+  const cacheObj = c.get('cache');
+  const cacheKey = `env_owner_${environmentId}`;
+  let ownerId = cacheObj?.get(cacheKey);
 
-  if (!owner || owner.user_id !== user.id) {
+  if (!ownerId) {
+    const owner = await c.env.DB.prepare('SELECT user_id FROM environments WHERE id = ?')
+      .bind(environmentId)
+      .first<{ user_id: string }>();
+    if (owner) {
+      ownerId = owner.user_id;
+      cacheObj?.set(cacheKey, ownerId, 60000);
+    }
+  }
+
+  if (!ownerId || ownerId !== user.id) {
     return c.json({ error: 'Environment not found or unauthorized' }, 403);
   }
 };
@@ -175,6 +242,7 @@ const archiveUpstreamResource = async (
 
 // Auth Middleware
 app.use('*', async (c, next) => {
+  c.set('cache', globalCache);
   if (!c.env.OKTA_DOMAIN) {
     if (c.env.AUTH_BYPASS_FOR_DEV === 'true') {
       c.set('user', { id: 'user-123', roles: ['admin'] });
@@ -514,40 +582,7 @@ app.post('/sessions/:session_id/run', async (c) => {
     const sessionStream = await client.beta.sessions.events.stream(sessionId);
 
     return streamSSE(c, async (stream) => {
-      if (events.length > 0) {
-        // Send events asynchronously without awaiting so the stream can start processing them immediately.
-        // Use void to explicitly discard the returned Promise (fire-and-forget with handled rejection).
-        void client.beta.sessions.events.send(sessionId, { events }).catch((err: unknown) => {
-          console.error('Error sending events to stream:', err);
-          // Abort the session stream so the for-await loop below terminates instead of hanging.
-          sessionStream.controller.abort();
-          stream.writeSSE({
-            data: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }),
-            event: 'error',
-          }).catch(() => {
-            // Ignore stream write errors if connection already closed
-          });
-        });
-      }
-
-      try {
-        for await (const event of sessionStream) {
-          await stream.writeSSE({
-            data: JSON.stringify(event),
-            event: 'message',
-            id: String(Date.now())
-          });
-        }
-      } catch (err: unknown) {
-        // If the stream was intentionally aborted (due to events.send failure above),
-        // skip writing a duplicate/misleading error event — the catch above already sent one.
-        if (!sessionStream.controller.signal.aborted) {
-          await stream.writeSSE({
-            data: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }),
-            event: 'error',
-          });
-        }
-      }
+      await processSessionStream(stream, sessionStream, client, sessionId, events);
     })
   } catch (err: unknown) {
     return c.json({ error: getErrorMessage(err) }, 500)
@@ -769,6 +804,7 @@ app.delete('/environments/:environment_id', async (c) => {
     } catch (err: unknown) {
       console.error('Failed to delete local environment ownership after upstream deletion', err);
     }
+    c.get('cache').delete(`env_owner_${environmentId}`);
   }
   return response;
 })
@@ -785,6 +821,9 @@ app.post('/environments/:environment_id/archive', async (c) => {
 app.get('/mcp/connections', async (c) => {
   try {
     const user = c.get('user');
+    if (!user.roles?.includes('admin')) {
+      return c.json({ error: 'Forbidden: Admin access required' }, 403);
+    }
     const { results } = await c.env.DB.prepare('SELECT DISTINCT provider FROM oauth_tokens WHERE user_id = ?').bind(user.id).all();
     return c.json({ connections: results.map(r => r.provider) });
   } catch (error: unknown) {
@@ -794,6 +833,10 @@ app.get('/mcp/connections', async (c) => {
 
 app.get('/mcp/tools/:provider', async (c) => {
   try {
+    const user = c.get('user');
+    if (!user.roles?.includes('admin')) {
+      return c.json({ error: 'Forbidden: Admin access required' }, 403);
+    }
     const provider = c.req.param('provider');
     const { results } = await c.env.DB.prepare('SELECT tool_name, type, permission FROM global_tool_permissions WHERE provider = ?').bind(provider).all();
 

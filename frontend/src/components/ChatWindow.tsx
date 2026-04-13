@@ -136,9 +136,10 @@ export function ChatWindow({ sessionId, onClose }: ChatWindowProps) {
         }
       }
     } catch (err: unknown) {
-      if (err instanceof Error && err.name === 'AbortError') return;
+      if (typeof err === 'object' && err !== null && 'name' in err && (err as { name: unknown }).name === 'AbortError') return;
       console.error(err);
-      setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'agent', content: err instanceof Error && err.message ? err.message : 'Error: Connection failed.' }]);
+      const errorMessage = err instanceof Error ? err.message : 'Error: Connection failed.';
+      setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'agent', content: errorMessage }]);
     } finally {
       setIsRunning(false);
       abortControllerRef.current = null;

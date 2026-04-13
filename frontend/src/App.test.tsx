@@ -48,9 +48,10 @@ describe('App Component', () => {
 
   it('logs an error when session creation fails', async () => {
     // Setup agents mock so the button is not disabled
-    vi.mocked(agentsApi.listAgents).mockResolvedValueOnce({
-      data: [{ id: 'agent-1', name: 'Test Agent' }]
-    });
+    // In App.tsx listAgents().then(res => setAgents(res))
+    vi.mocked(agentsApi.listAgents).mockResolvedValueOnce([
+      { id: 'agent-1', name: 'Test Agent' } as any
+    ]);
 
     // Setup createSession to fail
     const mockError = new Error('Network error');

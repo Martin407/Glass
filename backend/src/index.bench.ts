@@ -7,19 +7,19 @@ const mockData = {
 describe('response cloning', () => {
   bench('with clone', async () => {
     const response = new Response(JSON.stringify(mockData));
-    const data = await response.clone().json();
+    const data = await response.clone().json() as any;
     if (Array.isArray(data?.data)) {
        data.data = data.data.filter((e: any) => e.id);
     }
-    return data;
+    return data as unknown as void;
   });
 
   bench('without clone', async () => {
     const response = new Response(JSON.stringify(mockData));
-    const data = await response.json();
+    const data = await response.json() as any;
     if (Array.isArray(data?.data)) {
        data.data = data.data.filter((e: any) => e.id);
     }
-    return data;
+    return data as unknown as void;
   });
 });

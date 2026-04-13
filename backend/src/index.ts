@@ -216,8 +216,9 @@ const fetchAnthropic = async (c: AppContext, endpoint: string, options: RequestI
     // For DELETE operations, response might be empty or specific JSON
     const data = await response.json().catch(() => ({}));
     return c.json(data);
-  } catch (error: any) {
-    return c.json({ error: error.message }, 500);
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    return c.json({ error: errorMessage }, 500);
   }
 }
 
@@ -261,8 +262,9 @@ app.post('/agents', async (c) => {
     }
 
     return c.json(data);
-  } catch (err: any) {
-    return c.json({ error: err.message }, 500)
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    return c.json({ error: errorMessage }, 500)
   }
 })
 
@@ -296,8 +298,9 @@ app.get('/agents', async (c) => {
       data.data = [];
     }
     return c.json(data);
-  } catch (err: any) {
-    return c.json({ error: err.message }, 500);
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    return c.json({ error: errorMessage }, 500);
   }
 })
 
@@ -313,8 +316,9 @@ app.post('/agents/:agent_id', async (c) => {
     if (ownershipError) return ownershipError;
     const body = await c.req.json().catch(() => ({}))
     return fetchAnthropic(c, `/agents/${c.req.param('agent_id')}`, { method: 'POST', body: JSON.stringify(body) })
-  } catch (err: any) {
-    return c.json({ error: err.message }, 500)
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    return c.json({ error: errorMessage }, 500)
   }
 })
 
@@ -376,8 +380,9 @@ app.post('/sessions', async (c) => {
     }
 
     return c.json(data)
-  } catch (err: any) {
-    return c.json({ error: err.message }, 500)
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    return c.json({ error: errorMessage }, 500)
   }
 })
 
@@ -388,8 +393,9 @@ app.get('/sessions', async (c) => {
       .bind(user.id)
       .all()
     return c.json({ data: results })
-  } catch (err: any) {
-    return c.json({ error: err.message }, 500)
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    return c.json({ error: errorMessage }, 500)
   }
 })
 
@@ -405,8 +411,9 @@ app.post('/sessions/:session_id', async (c) => {
     if (ownershipError) return ownershipError;
     const body = await c.req.json().catch(() => ({}))
     return fetchAnthropic(c, `/sessions/${c.req.param('session_id')}`, { method: 'POST', body: JSON.stringify(body) })
-  } catch (err: any) {
-    return c.json({ error: err.message }, 500)
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    return c.json({ error: errorMessage }, 500)
   }
 })
 
@@ -492,8 +499,9 @@ app.post('/sessions/:session_id/run', async (c) => {
         }
       }
     })
-  } catch (err: any) {
-    return c.json({ error: err.message }, 500)
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    return c.json({ error: errorMessage }, 500)
   }
 })
 
@@ -509,8 +517,9 @@ app.post('/sessions/:session_id/events', async (c) => {
     if (ownershipError) return ownershipError;
     const body = await c.req.json().catch(() => ({}))
     return fetchAnthropic(c, `/sessions/${c.req.param('session_id')}/events`, { method: 'POST', body: JSON.stringify(body) })
-  } catch (err: any) {
-    return c.json({ error: err.message }, 500)
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    return c.json({ error: errorMessage }, 500)
   }
 })
 
@@ -579,8 +588,9 @@ app.post('/sessions/:session_id/resources', async (c) => {
     if (ownershipError) return ownershipError;
     const body = await c.req.json().catch(() => ({}))
     return fetchAnthropic(c, `/sessions/${c.req.param('session_id')}/resources`, { method: 'POST', body: JSON.stringify(body) })
-  } catch (err: any) {
-    return c.json({ error: err.message }, 500)
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    return c.json({ error: errorMessage }, 500)
   }
 })
 
@@ -602,8 +612,9 @@ app.post('/sessions/:session_id/resources/:resource_id', async (c) => {
     if (ownershipError) return ownershipError;
     const body = await c.req.json().catch(() => ({}))
     return fetchAnthropic(c, `/sessions/${c.req.param('session_id')}/resources/${c.req.param('resource_id')}`, { method: 'POST', body: JSON.stringify(body) })
-  } catch (err: any) {
-    return c.json({ error: err.message }, 500)
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    return c.json({ error: errorMessage }, 500)
   }
 })
 
@@ -647,8 +658,9 @@ app.post('/environments', async (c) => {
     }
 
     return response;
-  } catch (err: any) {
-    return c.json({ error: err.message }, 500)
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    return c.json({ error: errorMessage }, 500)
   }
 })
 
@@ -679,8 +691,9 @@ app.get('/environments', async (c) => {
       data.data = [];
     }
     return c.json(data);
-  } catch (err: any) {
-    return c.json({ error: err.message }, 500);
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    return c.json({ error: errorMessage }, 500);
   }
 })
 
@@ -696,8 +709,9 @@ app.post('/environments/:environment_id', async (c) => {
     if (ownershipError) return ownershipError;
     const body = await c.req.json().catch(() => ({}))
     return fetchAnthropic(c, `/environments/${c.req.param('environment_id')}`, { method: 'POST', body: JSON.stringify(body) })
-  } catch (err: any) {
-    return c.json({ error: err.message }, 500)
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    return c.json({ error: errorMessage }, 500)
   }
 })
 
@@ -730,8 +744,9 @@ app.get('/mcp/connections', async (c) => {
     const user = c.get('user');
     const { results } = await c.env.DB.prepare('SELECT DISTINCT provider FROM oauth_tokens WHERE user_id = ?').bind(user.id).all();
     return c.json({ connections: results.map(r => r.provider) });
-  } catch (error: any) {
-    return c.json({ error: error.message }, 500);
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    return c.json({ error: errorMessage }, 500);
   }
 });
 
@@ -748,8 +763,9 @@ app.get('/mcp/tools/:provider', async (c) => {
     }, { read_only: [], write_delete: [] });
 
     return c.json(tools);
-  } catch (error: any) {
-    return c.json({ error: error.message }, 500);
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    return c.json({ error: errorMessage }, 500);
   }
 });
 
@@ -770,8 +786,9 @@ app.post('/mcp/tools/:provider/:tool_name', async (c) => {
       .run();
 
     return c.json({ success: true });
-  } catch (error: any) {
-    return c.json({ error: error.message }, 500);
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    return c.json({ error: errorMessage }, 500);
   }
 });
 

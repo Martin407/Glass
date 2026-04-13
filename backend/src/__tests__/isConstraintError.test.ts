@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
-import { isConstraintError } from '../index.ts';
+import { isConstraintError } from '../index.js';
 
 describe('isConstraintError', () => {
   test('returns true when error.code is string "19"', () => {

@@ -1,12 +1,13 @@
 import { describe, it, expect, vi } from 'vitest'
 import { RealtimeStateObject } from './durable-object'
+import type { Bindings } from './index'
 
 describe('RealtimeStateObject', () => {
   describe('broadcast', () => {
     it('should send a message to all connected sessions', () => {
       // Mock DurableObjectState and env
       const state = {} as DurableObjectState
-      const env = {} as any
+      const env = {} as unknown as Bindings
 
       const ro = new RealtimeStateObject(state, env)
 
@@ -28,7 +29,7 @@ describe('RealtimeStateObject', () => {
     it('should remove sessions that throw an error during send', () => {
       // Mock DurableObjectState and env
       const state = {} as DurableObjectState
-      const env = {} as any
+      const env = {} as unknown as Bindings
 
       const ro = new RealtimeStateObject(state, env)
 

@@ -20,7 +20,7 @@ type Variables = {
   user: { id: string }
 }
 
-type AppContext = Context<{ Bindings: Bindings; Variables: Variables }>
+export type AppContext = Context<{ Bindings: Bindings; Variables: Variables }>
 
 const app = new Hono<{ Bindings: Bindings; Variables: Variables }>()
 
@@ -76,7 +76,7 @@ export const isConstraintError = (error: unknown): boolean => {
   return codes.includes(SQLITE_CONSTRAINT_ERROR_CODE) || codes.some((code) => code.startsWith('SQLITE_CONSTRAINT'));
 };
 
-class LRUCache<K, V> {
+export class LRUCache<K, V> {
   private maxSize: number;
   private cache: Map<K, V>;
 
@@ -106,7 +106,7 @@ class LRUCache<K, V> {
   }
 }
 
-const sessionOwnershipCache = new LRUCache<string, string>(1000);
+export const sessionOwnershipCache = new LRUCache<string, string>(1000);
 
 const ensureAgentOwnership = async (c: AppContext, agentId: string): Promise<Response | undefined> => {
   const user = getUser(c);
@@ -119,12 +119,12 @@ const ensureAgentOwnership = async (c: AppContext, agentId: string): Promise<Res
   }
 };
 
-const ensureSessionOwnership = async (c: AppContext, sessionId: string): Promise<Response | undefined> => {
+export const ensureSessionOwnership = async (c: AppContext, sessionId: string): Promise<Response | undefined> => {
   const user = getUser(c);
 
   let ownerUserId = sessionOwnershipCache.get(sessionId);
 
-  if (!ownerUserId) {
+  if (ownerUserId === undefined) {
     const owner = await c.env.DB.prepare('SELECT user_id FROM sessions WHERE id = ?')
       .bind(sessionId)
       .first<{ user_id: string }>();
@@ -135,7 +135,7 @@ const ensureSessionOwnership = async (c: AppContext, sessionId: string): Promise
     }
   }
 
-  if (!ownerUserId || ownerUserId !== user.id) {
+  if (ownerUserId === undefined || ownerUserId !== user.id) {
     return c.json({ error: 'Session not found or unauthorized' }, 403);
   }
 };

@@ -24,7 +24,7 @@ type Variables = {
 
 export type AppContext = Context<{ Bindings: Bindings; Variables: Variables }>
 
-const app = new Hono<{ Bindings: Bindings; Variables: Variables }>()
+export const app = new Hono<{ Bindings: Bindings; Variables: Variables }>()
 
 let jwks: ReturnType<typeof createRemoteJWKSet> | undefined;
 let jwksIssuer: string | undefined;

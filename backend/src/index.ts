@@ -47,15 +47,11 @@ export class TTLMemoryCache {
       if (this.cache.size >= this.maxSize) {
         const firstKey = this.cache.keys().next().value;
         if (firstKey !== undefined) {
-          this.cache.delete(firstKey);
+            this.cache.delete(firstKey);
         }
       }
     }
     this.cache.set(key, { value, expires: Date.now() + ttl });
-  }
-
-  delete(key: string) {
-    this.cache.delete(key);
   }
 }
 
@@ -70,7 +66,7 @@ const app = new Hono<{ Bindings: Bindings; Variables: Variables }>()
 
 let jwks: ReturnType<typeof createRemoteJWKSet> | undefined;
 let jwksIssuer: string | undefined;
-export const globalCache = new TTLMemoryCache();
+const globalCache = new TTLMemoryCache();
 // SQLite SQLITE_CONSTRAINT error code.
 const SQLITE_CONSTRAINT_ERROR_CODE = '19';
 
@@ -779,14 +775,13 @@ app.post('/environments/:environment_id', async (c) => {
 })
 
 app.delete('/environments/:environment_id', async (c) => {
-  const environmentId = c.req.param('environment_id');
-  const ownershipError = await ensureEnvironmentOwnership(c, environmentId);
+  const ownershipError = await ensureEnvironmentOwnership(c, c.req.param('environment_id'));
   if (ownershipError) return ownershipError;
+  const environmentId = c.req.param('environment_id');
   const response = await fetchAnthropic(c, `/environments/${environmentId}`, { method: 'DELETE' });
   if (response.ok) {
     try {
       await c.env.DB.prepare('DELETE FROM environments WHERE id = ?').bind(environmentId).run();
-      c.get('cache')?.delete(`env_owner_${environmentId}`);
     } catch (err) {
       console.error('Failed to delete local environment ownership after upstream deletion', err);
     }
@@ -854,7 +849,7 @@ app.post('/mcp/tools/:provider/:tool_name', async (c) => {
 });
 
 
-export { RealtimeStateObject, app }
+export { RealtimeStateObject }
 
 export default {
   fetch: app.fetch,

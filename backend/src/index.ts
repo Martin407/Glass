@@ -447,16 +447,20 @@ app.post('/sessions/:session_id/run', async (c) => {
 
     return streamSSE(c, async (stream) => {
       if (events.length > 0) {
-        try {
-          await client.beta.sessions.events.send(sessionId, { events });
-        } catch (err: any) {
-          await stream.writeSSE({
-            data: JSON.stringify({ error: err.message }),
-            event: 'error',
-          });
-          return;
-        }
+        // Send events asynchronously without awaiting so the stream can start processing them immediately
+        client.beta.sessions.events.send(sessionId, { events }).catch(async (err: any) => {
+          console.error('Error sending events to stream:', err);
+          try {
+            await stream.writeSSE({
+              data: JSON.stringify({ error: err.message }),
+              event: 'error',
+            });
+          } catch (writeErr) {
+             // Ignore stream write errors if connection closed
+          }
+        });
       }
+
       try {
         for await (const event of sessionStream) {
           await stream.writeSSE({

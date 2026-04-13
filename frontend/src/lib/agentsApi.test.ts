@@ -118,6 +118,16 @@ describe('agentsApi', () => {
   });
 
   describe('MCP endpoints', () => {
+    it('successfully fetches MCP connections via getMcpConnections API helper', async () => {
+      mockFetchSuccess({ connections: [] });
+
+      await agentsApi.getMcpConnections();
+
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/mcp/connections', {
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+
     it('getMcpConnections calls GET /api/mcp/connections', async () => {
       mockFetchSuccess({ connections: [] });
 

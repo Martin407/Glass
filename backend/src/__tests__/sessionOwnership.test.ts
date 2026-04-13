@@ -1,17 +1,19 @@
 import { describe, it, expect, vi } from 'vitest';
-import { LRUCache, ensureSessionOwnership } from '../index.js';
+import { TTLMemoryCache, LRUCache, ensureSessionOwnership } from '../index.js';
 import type { AppContext } from '../index.js';
 
 // Builds a minimal mock AppContext for testing ensureSessionOwnership.
-function makeCtx(userId: string, dbResult: { user_id: string } | null) {
+function makeCtx(userId: string, dbResult: { user_id: string } | null, cacheInstance = new TTLMemoryCache()) {
   const prepareMock = vi.fn().mockReturnValue({
     bind: vi.fn().mockReturnValue({
       first: vi.fn().mockResolvedValue(dbResult),
     }),
   });
   return {
-    ctx: { get: (_key: string) => ({ id: userId }) },
-    get: (_key: string) => ({ id: userId }),
+    get: (key: string) => {
+      if (key === 'user') return { id: userId };
+      if (key === 'cache') return cacheInstance;
+    },
     env: { DB: { prepare: prepareMock } },
     json: vi.fn(),
     prepareMock,
@@ -94,7 +96,8 @@ describe('ensureSessionOwnership', () => {
   it('queries the DB only on the first lookup; subsequent calls use the cache', async () => {
     // Use a unique session ID to avoid interference from the module-level cache
     const sessionId = `sess-cache-${Math.random()}`;
-    const ctx = makeCtx('user-4', { user_id: 'user-4' });
+    const cache = new TTLMemoryCache();
+    const ctx = makeCtx('user-4', { user_id: 'user-4' }, cache);
     const { prepareMock } = ctx as unknown as { prepareMock: ReturnType<typeof vi.fn> };
 
     // First call — should hit the DB

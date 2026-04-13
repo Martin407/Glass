@@ -82,7 +82,7 @@ function App() {
   useEffect(() => {
     agentsApi.listAgents().then((res: any) => {
       if (res.data) setAgents(res.data);
-    }).catch(console.error);
+    }).catch((err) => console.error('Failed to list agents:', err instanceof Error ? err : new Error(String(err))));
   }, []);
 
   const handleCreateSession = async () => {
@@ -112,7 +112,7 @@ function App() {
           connected: res.connections.includes(app.name)
         })));
       }
-    }).catch(console.error);
+    }).catch((err) => console.error('Failed to get MCP connections:', err instanceof Error ? err : new Error(String(err))));
   }, []);
 
   useEffect(() => {
@@ -121,7 +121,7 @@ function App() {
     agentsApi.getMcpTools(selectedProvider).then((res: any) => {
       setReadOnlyTools(res.read_only || []);
       setWriteDeleteTools(res.write_delete || []);
-    }).catch(console.error);
+    }).catch((err) => console.error('Failed to get MCP tools:', err instanceof Error ? err : new Error(String(err))));
   }, [selectedProvider]);
 
   const handleToggle = (toolName: string, newStatus: string, type: 'read_only' | 'write_delete') => {
@@ -131,7 +131,7 @@ function App() {
       } else {
         setWriteDeleteTools(prev => prev.map(t => t.name === toolName ? { ...t, status: newStatus } : t));
       }
-    }).catch(console.error);
+    }).catch((err) => console.error('Failed to update MCP tool permission:', err instanceof Error ? err : new Error(String(err))));
   };
 
   const selectedApp = appState.find(a => a.name === selectedProvider) || appState[0];

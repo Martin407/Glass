@@ -16,7 +16,7 @@ export type Bindings = {
   AUTH_BYPASS_FOR_DEV?: string
 }
 
-class TTLMemoryCache {
+export class TTLMemoryCache {
   private cache = new Map<string, { value: string; expires: number }>();
   private readonly maxSize: number;
 
@@ -53,6 +53,10 @@ class TTLMemoryCache {
     }
     this.cache.set(key, { value, expires: Date.now() + ttl });
   }
+
+  delete(key: string) {
+    this.cache.delete(key);
+  }
 }
 
 type Variables = {
@@ -66,7 +70,7 @@ const app = new Hono<{ Bindings: Bindings; Variables: Variables }>()
 
 let jwks: ReturnType<typeof createRemoteJWKSet> | undefined;
 let jwksIssuer: string | undefined;
-const globalCache = new TTLMemoryCache();
+export const globalCache = new TTLMemoryCache();
 // SQLite SQLITE_CONSTRAINT error code.
 const SQLITE_CONSTRAINT_ERROR_CODE = '19';
 
@@ -162,10 +166,20 @@ const ensureSessionOwnership = async (c: AppContext, sessionId: string): Promise
 
 const ensureEnvironmentOwnership = async (c: AppContext, environmentId: string): Promise<Response | undefined> => {
   const user = getUser(c);
-  const owner = await c.env.DB.prepare('SELECT user_id FROM environments WHERE id = ?')
-    .bind(environmentId)
-    .first<{ user_id: string }>();
-  const ownerId = owner?.user_id;
+  const cacheObj = c.get('cache');
+  const cacheKey = `env_owner_${environmentId}`;
+  let ownerId = cacheObj?.get(cacheKey);
+
+  if (!ownerId) {
+    const owner = await c.env.DB.prepare('SELECT user_id FROM environments WHERE id = ?')
+      .bind(environmentId)
+      .first<{ user_id: string }>();
+    if (owner) {
+      ownerId = owner.user_id;
+      cacheObj?.set(cacheKey, ownerId, 60000);
+    }
+  }
+
   if (!ownerId || ownerId !== user.id) {
     return c.json({ error: 'Environment not found or unauthorized' }, 403);
   }
@@ -765,13 +779,14 @@ app.post('/environments/:environment_id', async (c) => {
 })
 
 app.delete('/environments/:environment_id', async (c) => {
-  const ownershipError = await ensureEnvironmentOwnership(c, c.req.param('environment_id'));
-  if (ownershipError) return ownershipError;
   const environmentId = c.req.param('environment_id');
+  const ownershipError = await ensureEnvironmentOwnership(c, environmentId);
+  if (ownershipError) return ownershipError;
   const response = await fetchAnthropic(c, `/environments/${environmentId}`, { method: 'DELETE' });
   if (response.ok) {
     try {
       await c.env.DB.prepare('DELETE FROM environments WHERE id = ?').bind(environmentId).run();
+      c.get('cache')?.delete(`env_owner_${environmentId}`);
     } catch (err) {
       console.error('Failed to delete local environment ownership after upstream deletion', err);
     }
@@ -839,7 +854,7 @@ app.post('/mcp/tools/:provider/:tool_name', async (c) => {
 });
 
 
-export { RealtimeStateObject }
+export { RealtimeStateObject, app }
 
 export default {
   fetch: app.fetch,

@@ -16,8 +16,48 @@ export type Bindings = {
   AUTH_BYPASS_FOR_DEV?: string
 }
 
+class TTLMemoryCache {
+  private cache = new Map<string, { value: string; expires: number }>();
+  private readonly maxSize: number;
+
+  constructor(maxSize: number = 1000) {
+    this.maxSize = maxSize;
+  }
+
+  get(key: string): string | undefined {
+    const item = this.cache.get(key);
+    if (!item) return undefined;
+    if (Date.now() > item.expires) {
+      this.cache.delete(key);
+      return undefined;
+    }
+    return item.value;
+  }
+
+  set(key: string, value: string, ttl: number) {
+    if (this.cache.size >= this.maxSize) {
+      // Lazy eviction for space: delete the first expired item found,
+      // or simply the first item (oldest inserted) if none are expired.
+      for (const [k, v] of this.cache.entries()) {
+        if (Date.now() > v.expires) {
+          this.cache.delete(k);
+          break;
+        }
+      }
+      if (this.cache.size >= this.maxSize) {
+        const firstKey = this.cache.keys().next().value;
+        if (firstKey !== undefined) {
+            this.cache.delete(firstKey);
+        }
+      }
+    }
+    this.cache.set(key, { value, expires: Date.now() + ttl });
+  }
+}
+
 type Variables = {
   user: { id: string }
+  cache: TTLMemoryCache
 }
 
 type AppContext = Context<{ Bindings: Bindings; Variables: Variables }>
@@ -26,6 +66,7 @@ const app = new Hono<{ Bindings: Bindings; Variables: Variables }>()
 
 let jwks: ReturnType<typeof createRemoteJWKSet> | undefined;
 let jwksIssuer: string | undefined;
+const globalCache = new TTLMemoryCache();
 // SQLite SQLITE_CONSTRAINT error code.
 const SQLITE_CONSTRAINT_ERROR_CODE = '19';
 
@@ -78,33 +119,64 @@ export const isConstraintError = (error: unknown): boolean => {
 
 const ensureAgentOwnership = async (c: AppContext, agentId: string): Promise<Response | undefined> => {
   const user = getUser(c);
-  const owner = await c.env.DB.prepare('SELECT user_id FROM agents WHERE id = ?')
-    .bind(agentId)
-    .first<{ user_id: string }>();
+  const cacheObj = c.get('cache');
+  const cacheKey = `agent_owner_${agentId}`;
+  let ownerId = cacheObj?.get(cacheKey);
 
-  if (!owner || owner.user_id !== user.id) {
+  if (!ownerId) {
+    const owner = await c.env.DB.prepare('SELECT user_id FROM agents WHERE id = ?')
+      .bind(agentId)
+      .first<{ user_id: string }>();
+    if (owner) {
+      ownerId = owner.user_id;
+      // Cache ownership check for 1 minute (60,000 ms)
+      cacheObj?.set(cacheKey, ownerId, 60000);
+    }
+  }
+
+  if (!ownerId || ownerId !== user.id) {
     return c.json({ error: 'Agent not found or unauthorized' }, 403);
   }
 };
 
 const ensureSessionOwnership = async (c: AppContext, sessionId: string): Promise<Response | undefined> => {
   const user = getUser(c);
-  const owner = await c.env.DB.prepare('SELECT user_id FROM sessions WHERE id = ?')
-    .bind(sessionId)
-    .first<{ user_id: string }>();
+  const cacheObj = c.get('cache');
+  const cacheKey = `session_owner_${sessionId}`;
+  let ownerId = cacheObj?.get(cacheKey);
 
-  if (!owner || owner.user_id !== user.id) {
+  if (!ownerId) {
+    const owner = await c.env.DB.prepare('SELECT user_id FROM sessions WHERE id = ?')
+      .bind(sessionId)
+      .first<{ user_id: string }>();
+    if (owner) {
+      ownerId = owner.user_id;
+      cacheObj?.set(cacheKey, ownerId, 60000);
+    }
+  }
+
+  if (!ownerId || ownerId !== user.id) {
     return c.json({ error: 'Session not found or unauthorized' }, 403);
   }
 };
 
 const ensureEnvironmentOwnership = async (c: AppContext, environmentId: string): Promise<Response | undefined> => {
   const user = getUser(c);
-  const owner = await c.env.DB.prepare('SELECT user_id FROM environments WHERE id = ?')
-    .bind(environmentId)
-    .first<{ user_id: string }>();
+  const cacheObj = c.get('cache');
+  const cacheKey = `env_owner_${environmentId}`;
+  let ownerId = cacheObj?.get(cacheKey);
 
-  if (!owner || owner.user_id !== user.id) {
+  if (!ownerId) {
+    const owner = await c.env.DB.prepare('SELECT user_id FROM environments WHERE id = ?')
+      .bind(environmentId)
+      .first<{ user_id: string }>();
+    if (owner) {
+      ownerId = owner.user_id;
+      cacheObj?.set(cacheKey, ownerId, 60000);
+    }
+  }
+
+  if (!ownerId || ownerId !== user.id) {
     return c.json({ error: 'Environment not found or unauthorized' }, 403);
   }
 };
@@ -131,6 +203,7 @@ const archiveUpstreamResource = async (
 
 // Auth Middleware
 app.use('*', async (c, next) => {
+  c.set('cache', globalCache);
   if (!c.env.OKTA_DOMAIN) {
     if (c.env.AUTH_BYPASS_FOR_DEV === 'true') {
       c.set('user', { id: 'user-123' });

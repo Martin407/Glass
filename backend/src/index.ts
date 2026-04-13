@@ -1,5 +1,7 @@
 import { Context, Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
+
+const getErrorMessage = (error: unknown): string => error instanceof Error ? error.message : String(error);
 import { RealtimeStateObject } from './durable-object'
 import { Anthropic } from '@anthropic-ai/sdk'
 import { jwtVerify, createRemoteJWKSet } from 'jose'
@@ -217,8 +219,7 @@ const fetchAnthropic = async (c: AppContext, endpoint: string, options: RequestI
     const data = await response.json().catch(() => ({}));
     return c.json(data);
   } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    return c.json({ error: errorMessage }, 500);
+    return c.json({ error: getErrorMessage(error) }, 500)
   }
 }
 
@@ -263,8 +264,7 @@ app.post('/agents', async (c) => {
 
     return c.json(data);
   } catch (err: unknown) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    return c.json({ error: errorMessage }, 500)
+    return c.json({ error: getErrorMessage(err) }, 500)
   }
 })
 
@@ -299,8 +299,7 @@ app.get('/agents', async (c) => {
     }
     return c.json(data);
   } catch (err: unknown) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    return c.json({ error: errorMessage }, 500);
+    return c.json({ error: getErrorMessage(err) }, 500)
   }
 })
 
@@ -317,8 +316,7 @@ app.post('/agents/:agent_id', async (c) => {
     const body = await c.req.json().catch(() => ({}))
     return fetchAnthropic(c, `/agents/${c.req.param('agent_id')}`, { method: 'POST', body: JSON.stringify(body) })
   } catch (err: unknown) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    return c.json({ error: errorMessage }, 500)
+    return c.json({ error: getErrorMessage(err) }, 500)
   }
 })
 
@@ -381,8 +379,7 @@ app.post('/sessions', async (c) => {
 
     return c.json(data)
   } catch (err: unknown) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    return c.json({ error: errorMessage }, 500)
+    return c.json({ error: getErrorMessage(err) }, 500)
   }
 })
 
@@ -394,8 +391,7 @@ app.get('/sessions', async (c) => {
       .all()
     return c.json({ data: results })
   } catch (err: unknown) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    return c.json({ error: errorMessage }, 500)
+    return c.json({ error: getErrorMessage(err) }, 500)
   }
 })
 
@@ -412,8 +408,7 @@ app.post('/sessions/:session_id', async (c) => {
     const body = await c.req.json().catch(() => ({}))
     return fetchAnthropic(c, `/sessions/${c.req.param('session_id')}`, { method: 'POST', body: JSON.stringify(body) })
   } catch (err: unknown) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    return c.json({ error: errorMessage }, 500)
+    return c.json({ error: getErrorMessage(err) }, 500)
   }
 })
 
@@ -500,8 +495,7 @@ app.post('/sessions/:session_id/run', async (c) => {
       }
     })
   } catch (err: unknown) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    return c.json({ error: errorMessage }, 500)
+    return c.json({ error: getErrorMessage(err) }, 500)
   }
 })
 
@@ -518,8 +512,7 @@ app.post('/sessions/:session_id/events', async (c) => {
     const body = await c.req.json().catch(() => ({}))
     return fetchAnthropic(c, `/sessions/${c.req.param('session_id')}/events`, { method: 'POST', body: JSON.stringify(body) })
   } catch (err: unknown) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    return c.json({ error: errorMessage }, 500)
+    return c.json({ error: getErrorMessage(err) }, 500)
   }
 })
 
@@ -589,8 +582,7 @@ app.post('/sessions/:session_id/resources', async (c) => {
     const body = await c.req.json().catch(() => ({}))
     return fetchAnthropic(c, `/sessions/${c.req.param('session_id')}/resources`, { method: 'POST', body: JSON.stringify(body) })
   } catch (err: unknown) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    return c.json({ error: errorMessage }, 500)
+    return c.json({ error: getErrorMessage(err) }, 500)
   }
 })
 
@@ -613,8 +605,7 @@ app.post('/sessions/:session_id/resources/:resource_id', async (c) => {
     const body = await c.req.json().catch(() => ({}))
     return fetchAnthropic(c, `/sessions/${c.req.param('session_id')}/resources/${c.req.param('resource_id')}`, { method: 'POST', body: JSON.stringify(body) })
   } catch (err: unknown) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    return c.json({ error: errorMessage }, 500)
+    return c.json({ error: getErrorMessage(err) }, 500)
   }
 })
 
@@ -659,8 +650,7 @@ app.post('/environments', async (c) => {
 
     return response;
   } catch (err: unknown) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    return c.json({ error: errorMessage }, 500)
+    return c.json({ error: getErrorMessage(err) }, 500)
   }
 })
 
@@ -692,8 +682,7 @@ app.get('/environments', async (c) => {
     }
     return c.json(data);
   } catch (err: unknown) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    return c.json({ error: errorMessage }, 500);
+    return c.json({ error: getErrorMessage(err) }, 500)
   }
 })
 
@@ -710,8 +699,7 @@ app.post('/environments/:environment_id', async (c) => {
     const body = await c.req.json().catch(() => ({}))
     return fetchAnthropic(c, `/environments/${c.req.param('environment_id')}`, { method: 'POST', body: JSON.stringify(body) })
   } catch (err: unknown) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    return c.json({ error: errorMessage }, 500)
+    return c.json({ error: getErrorMessage(err) }, 500)
   }
 })
 
@@ -745,8 +733,7 @@ app.get('/mcp/connections', async (c) => {
     const { results } = await c.env.DB.prepare('SELECT DISTINCT provider FROM oauth_tokens WHERE user_id = ?').bind(user.id).all();
     return c.json({ connections: results.map(r => r.provider) });
   } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    return c.json({ error: errorMessage }, 500);
+    return c.json({ error: getErrorMessage(error) }, 500)
   }
 });
 
@@ -764,8 +751,7 @@ app.get('/mcp/tools/:provider', async (c) => {
 
     return c.json(tools);
   } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    return c.json({ error: errorMessage }, 500);
+    return c.json({ error: getErrorMessage(error) }, 500)
   }
 });
 
@@ -787,8 +773,7 @@ app.post('/mcp/tools/:provider/:tool_name', async (c) => {
 
     return c.json({ success: true });
   } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    return c.json({ error: errorMessage }, 500);
+    return c.json({ error: getErrorMessage(error) }, 500)
   }
 });
 

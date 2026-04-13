@@ -82,3 +82,11 @@ CREATE TABLE IF NOT EXISTS agents (
   FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_agents_user_id ON agents(user_id);
+
+CREATE TABLE IF NOT EXISTS environments (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_environments_user_id ON environments(user_id);

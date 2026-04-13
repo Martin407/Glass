@@ -98,9 +98,20 @@ const ensureSessionOwnership = async (c: AppContext, sessionId: string): Promise
   }
 };
 
+const ensureEnvironmentOwnership = async (c: AppContext, environmentId: string): Promise<Response | undefined> => {
+  const user = getUser(c);
+  const owner = await c.env.DB.prepare('SELECT user_id FROM environments WHERE id = ?')
+    .bind(environmentId)
+    .first<{ user_id: string }>();
+
+  if (!owner || owner.user_id !== user.id) {
+    return c.json({ error: 'Environment not found or unauthorized' }, 403);
+  }
+};
+
 const archiveUpstreamResource = async (
   c: AppContext,
-  resourceType: 'agents' | 'sessions',
+  resourceType: 'agents' | 'sessions' | 'environments',
   resourceId: string,
   errorContext: string
 ) => {
@@ -605,23 +616,84 @@ app.delete('/sessions/:session_id/resources/:resource_id', async (c) => {
 // ----- Environments Endpoints -----
 app.post('/environments', async (c) => {
   try {
+    if (!c.env.ANTHROPIC_API_KEY) {
+      return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 500);
+    }
+    const user = getUser(c);
     const body = await c.req.json().catch(() => ({}))
-    return fetchAnthropic(c, '/environments', { method: 'POST', body: JSON.stringify(body) })
+
+    const response = await fetchAnthropic(c, '/environments', { method: 'POST', body: JSON.stringify(body) });
+
+    if (!response.ok) {
+      return response;
+    }
+
+    // Clone the response so we can read it and still return it.
+    const data = await response.clone().json() as any;
+
+    if (data.id) {
+      try {
+        await c.env.DB.prepare('INSERT INTO environments (id, user_id) VALUES (?, ?)')
+          .bind(data.id, user.id)
+          .run();
+      } catch (err: any) {
+        await archiveUpstreamResource(c, 'environments', data.id, 'Failed to persist local environment ownership after upstream create');
+        if (isConstraintError(err)) {
+          return c.json({ error: 'Environment already exists' }, 409);
+        }
+        console.error('Failed to store local environment ownership after creating environment', err);
+        return c.json({ error: 'Failed to store local environment ownership after creating environment' }, 500);
+      }
+    }
+
+    return response;
   } catch (err: any) {
     return c.json({ error: err.message }, 500)
   }
 })
 
 app.get('/environments', async (c) => {
-  return fetchAnthropic(c, '/environments')
+  try {
+    if (!c.env.ANTHROPIC_API_KEY) {
+      return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 500);
+    }
+    const user = getUser(c);
+    const { results } = await c.env.DB.prepare('SELECT id FROM environments WHERE user_id = ?')
+      .bind(user.id)
+      .all<{ id: string }>();
+    const ownedEnvironmentIds = new Set(results.map((row: { id: string }) => row.id));
+    if (ownedEnvironmentIds.size === 0) {
+      return c.json({ data: [] });
+    }
+
+    const response = await fetchAnthropic(c, '/environments');
+
+    if (!response.ok) {
+      return response;
+    }
+
+    const data = await response.clone().json() as any;
+    if (Array.isArray(data?.data)) {
+      data.data = data.data.filter((environment: { id?: string }) => environment.id && ownedEnvironmentIds.has(environment.id));
+    } else {
+      data.data = [];
+    }
+    return c.json(data);
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500);
+  }
 })
 
 app.get('/environments/:environment_id', async (c) => {
+  const ownershipError = await ensureEnvironmentOwnership(c, c.req.param('environment_id'));
+  if (ownershipError) return ownershipError;
   return fetchAnthropic(c, `/environments/${c.req.param('environment_id')}`)
 })
 
 app.post('/environments/:environment_id', async (c) => {
   try {
+    const ownershipError = await ensureEnvironmentOwnership(c, c.req.param('environment_id'));
+    if (ownershipError) return ownershipError;
     const body = await c.req.json().catch(() => ({}))
     return fetchAnthropic(c, `/environments/${c.req.param('environment_id')}`, { method: 'POST', body: JSON.stringify(body) })
   } catch (err: any) {
@@ -630,10 +702,23 @@ app.post('/environments/:environment_id', async (c) => {
 })
 
 app.delete('/environments/:environment_id', async (c) => {
-  return fetchAnthropic(c, `/environments/${c.req.param('environment_id')}`, { method: 'DELETE' })
+  const ownershipError = await ensureEnvironmentOwnership(c, c.req.param('environment_id'));
+  if (ownershipError) return ownershipError;
+  const environmentId = c.req.param('environment_id');
+  const response = await fetchAnthropic(c, `/environments/${environmentId}`, { method: 'DELETE' });
+  if (response.ok) {
+    try {
+      await c.env.DB.prepare('DELETE FROM environments WHERE id = ?').bind(environmentId).run();
+    } catch (err) {
+      console.error('Failed to delete local environment ownership after upstream deletion', err);
+    }
+  }
+  return response;
 })
 
 app.post('/environments/:environment_id/archive', async (c) => {
+  const ownershipError = await ensureEnvironmentOwnership(c, c.req.param('environment_id'));
+  if (ownershipError) return ownershipError;
   return fetchAnthropic(c, `/environments/${c.req.param('environment_id')}/archive`, { method: 'POST' })
 })
 

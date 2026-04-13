@@ -794,10 +794,6 @@ app.get('/mcp/connections', async (c) => {
 
 app.get('/mcp/tools/:provider', async (c) => {
   try {
-    const user = c.get('user');
-    if (!user.roles?.includes('admin')) {
-      return c.json({ error: 'Forbidden: Admin access required' }, 403);
-    }
     const provider = c.req.param('provider');
     const { results } = await c.env.DB.prepare('SELECT tool_name, type, permission FROM global_tool_permissions WHERE provider = ?').bind(provider).all();
 

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest'
 import { RealtimeStateObject } from './durable-object'
+import type { Bindings } from './index'
 
 // Setup global Mock for WebSocketPair
 class MockWebSocket {
@@ -144,7 +145,7 @@ describe('RealtimeStateObject', () => {
     it('should send a message to all connected sessions', () => {
       // Mock DurableObjectState and env
       const state = {} as DurableObjectState
-      const env = {}
+      const env = {} as unknown as Bindings
 
       const ro = new RealtimeStateObject(state, env)
 
@@ -166,7 +167,7 @@ describe('RealtimeStateObject', () => {
     it('should remove sessions that throw an error during send', () => {
       // Mock DurableObjectState and env
       const state = {} as DurableObjectState
-      const env = {}
+      const env = {} as unknown as Bindings
 
       const ro = new RealtimeStateObject(state, env)
 

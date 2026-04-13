@@ -1,9 +1,11 @@
+import { Bindings } from './index'
+
 export class RealtimeStateObject {
   state: DurableObjectState
-  env: any
+  env: Bindings
   sessions: Set<WebSocket>
 
-  constructor(state: DurableObjectState, env: any) {
+  constructor(state: DurableObjectState, env: Bindings) {
     this.state = state
     this.env = env
     this.sessions = new Set()

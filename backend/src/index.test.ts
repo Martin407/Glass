@@ -1,5 +1,54 @@
 import { describe, it, expect } from 'vitest';
-import { getOktaIssuer, normalizeOktaDomain, normalizeIssuer } from './index';
+import { getOktaIssuer, normalizeOktaDomain, normalizeIssuer, parseAnthropicError, handleAnthropicError } from './index';
+
+describe('Anthropic Error Handling Utilities', () => {
+  describe('parseAnthropicError', () => {
+    it('should extract error message from valid JSON', async () => {
+      const response = new Response(JSON.stringify({ error: { message: 'Custom API Error' } }), {
+        status: 400,
+        statusText: 'Bad Request'
+      });
+      const result = await parseAnthropicError(response);
+      expect(result).toBe('Custom API Error');
+    });
+
+    it('should fallback to status info if JSON parsing fails', async () => {
+      const response = new Response('Not a JSON string', {
+        status: 500,
+        statusText: 'Internal Server Error'
+      });
+      const result = await parseAnthropicError(response);
+      expect(result).toBe('Anthropic API Error: 500 Internal Server Error');
+    });
+
+    it('should fallback to status info if JSON has no error message', async () => {
+      const response = new Response(JSON.stringify({ someData: 'value' }), {
+        status: 403,
+        statusText: 'Forbidden'
+      });
+      const result = await parseAnthropicError(response);
+      expect(result).toBe('Anthropic API Error: 403 Forbidden');
+    });
+  });
+
+  describe('handleAnthropicError', () => {
+    it('should return a JSON response with status and parsed message', async () => {
+      const c = {
+        json: (data: any, status: any) => ({ data, status })
+      } as any;
+      const response = new Response(JSON.stringify({ error: { message: 'Auth failed' } }), {
+        status: 401,
+        statusText: 'Unauthorized'
+      });
+
+      const result = await handleAnthropicError(c, response);
+      expect(result).toEqual({
+        data: { error: 'Auth failed' },
+        status: 401
+      });
+    });
+  });
+});
 
 describe('Okta Issuer Configuration', () => {
   describe('normalizeOktaDomain', () => {

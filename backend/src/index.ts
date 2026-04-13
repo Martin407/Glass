@@ -1,5 +1,7 @@
 import { Context, Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
+
+const getErrorMessage = (error: unknown): string => error instanceof Error ? error.message : String(error);
 import { RealtimeStateObject } from './durable-object'
 import { Anthropic } from '@anthropic-ai/sdk'
 import { jwtVerify, createRemoteJWKSet } from 'jose'
@@ -20,7 +22,7 @@ type Variables = {
   user: { id: string }
 }
 
-type AppContext = Context<{ Bindings: Bindings; Variables: Variables }>
+export type AppContext = Context<{ Bindings: Bindings; Variables: Variables }>
 
 const app = new Hono<{ Bindings: Bindings; Variables: Variables }>()
 
@@ -76,6 +78,38 @@ export const isConstraintError = (error: unknown): boolean => {
   return codes.includes(SQLITE_CONSTRAINT_ERROR_CODE) || codes.some((code) => code.startsWith('SQLITE_CONSTRAINT'));
 };
 
+export class LRUCache<K, V> {
+  private maxSize: number;
+  private cache: Map<K, V>;
+
+  constructor(maxSize: number) {
+    this.maxSize = maxSize;
+    this.cache = new Map<K, V>();
+  }
+
+  get(key: K): V | undefined {
+    if (!this.cache.has(key)) return undefined;
+    const val = this.cache.get(key)!;
+    this.cache.delete(key);
+    this.cache.set(key, val);
+    return val;
+  }
+
+  set(key: K, value: V): void {
+    if (this.cache.has(key)) {
+      this.cache.delete(key);
+    } else if (this.cache.size >= this.maxSize) {
+      const firstKey = this.cache.keys().next().value;
+      if (firstKey !== undefined) {
+        this.cache.delete(firstKey);
+      }
+    }
+    this.cache.set(key, value);
+  }
+}
+
+export const sessionOwnershipCache = new LRUCache<string, string>(1000);
+
 const ensureAgentOwnership = async (c: AppContext, agentId: string): Promise<Response | undefined> => {
   const user = getUser(c);
   const owner = await c.env.DB.prepare('SELECT user_id FROM agents WHERE id = ?')
@@ -87,13 +121,23 @@ const ensureAgentOwnership = async (c: AppContext, agentId: string): Promise<Res
   }
 };
 
-const ensureSessionOwnership = async (c: AppContext, sessionId: string): Promise<Response | undefined> => {
+export const ensureSessionOwnership = async (c: AppContext, sessionId: string): Promise<Response | undefined> => {
   const user = getUser(c);
-  const owner = await c.env.DB.prepare('SELECT user_id FROM sessions WHERE id = ?')
-    .bind(sessionId)
-    .first<{ user_id: string }>();
 
-  if (!owner || owner.user_id !== user.id) {
+  let ownerUserId = sessionOwnershipCache.get(sessionId);
+
+  if (ownerUserId === undefined) {
+    const owner = await c.env.DB.prepare('SELECT user_id FROM sessions WHERE id = ?')
+      .bind(sessionId)
+      .first<{ user_id: string }>();
+
+    if (owner) {
+      ownerUserId = owner.user_id;
+      sessionOwnershipCache.set(sessionId, ownerUserId);
+    }
+  }
+
+  if (ownerUserId === undefined || ownerUserId !== user.id) {
     return c.json({ error: 'Session not found or unauthorized' }, 403);
   }
 };
@@ -136,7 +180,8 @@ app.use('*', async (c, next) => {
       c.set('user', { id: 'user-123' });
       return await next();
     }
-    return c.json({ error: 'Authentication is misconfigured: OKTA_DOMAIN is required' }, 500);
+    console.error('Authentication is misconfigured: OKTA_DOMAIN is required');
+    return c.json({ error: 'Authentication is misconfigured' }, 500);
   }
 
   let issuer: string;
@@ -144,11 +189,13 @@ app.use('*', async (c, next) => {
     issuer = getOktaIssuer(c.env.OKTA_DOMAIN, c.env.OKTA_ISSUER);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Invalid OKTA auth configuration';
-    return c.json({ error: `Authentication is misconfigured: ${message}` }, 500);
+    console.error(`Authentication is misconfigured: ${message}`, error);
+    return c.json({ error: 'Authentication is misconfigured' }, 500);
   }
   const audience = getOktaAudience(c.env.OKTA_AUDIENCE, c.env.OKTA_CLIENT_ID);
   if (!audience) {
-    return c.json({ error: 'Authentication is misconfigured: OKTA_AUDIENCE or OKTA_CLIENT_ID is required' }, 500);
+    console.error('Authentication is misconfigured: OKTA_AUDIENCE or OKTA_CLIENT_ID is required');
+    return c.json({ error: 'Authentication is misconfigured' }, 500);
   }
 
   const authHeader = c.req.header('Authorization');
@@ -174,10 +221,20 @@ app.use('*', async (c, next) => {
     }
     c.set('user', { id: payload.sub });
     return await next();
-  } catch (error) {
+  } catch (error: unknown) {
     return c.json({ error: 'Unauthorized' }, 401);
   }
 })
+
+export const parseAnthropicError = async (response: Response): Promise<string> => {
+  const errorData = await response.json().catch(() => ({})) as any;
+  return errorData.error?.message || `Anthropic API Error: ${response.status} ${response.statusText}`;
+};
+
+export const handleAnthropicError = async (c: AppContext, response: Response) => {
+  const errorMessage = await parseAnthropicError(response);
+  return c.json({ error: errorMessage }, response.status as any);
+};
 
 const getAnthropicHeaders = (c: AppContext) => {
   const headers: Record<string, string> = {
@@ -209,15 +266,14 @@ const fetchAnthropic = async (c: AppContext, endpoint: string, options: RequestI
     })
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({})) as any;
-      return c.json({ error: errorData.error?.message || `Anthropic API Error: ${response.status} ${response.statusText}` }, response.status as any);
+      return handleAnthropicError(c, response);
     }
 
     // For DELETE operations, response might be empty or specific JSON
     const data = await response.json().catch(() => ({}));
     return c.json(data);
-  } catch (error: any) {
-    return c.json({ error: error.message }, 500);
+  } catch (error: unknown) {
+    return c.json({ error: getErrorMessage(error) }, 500)
   }
 }
 
@@ -240,8 +296,7 @@ app.post('/agents', async (c) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({})) as any;
-      return c.json({ error: errorData.error?.message || `Anthropic API Error: ${response.status} ${response.statusText}` }, response.status as any);
+      return handleAnthropicError(c, response);
     }
 
     const data: any = await response.json();
@@ -261,8 +316,8 @@ app.post('/agents', async (c) => {
     }
 
     return c.json(data);
-  } catch (err: any) {
-    return c.json({ error: err.message }, 500)
+  } catch (err: unknown) {
+    return c.json({ error: getErrorMessage(err) }, 500)
   }
 })
 
@@ -285,8 +340,7 @@ app.get('/agents', async (c) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({})) as any;
-      return c.json({ error: errorData.error?.message || `Anthropic API Error: ${response.status} ${response.statusText}` }, response.status as any);
+      return handleAnthropicError(c, response);
     }
 
     const data: any = await response.json();
@@ -296,8 +350,8 @@ app.get('/agents', async (c) => {
       data.data = [];
     }
     return c.json(data);
-  } catch (err: any) {
-    return c.json({ error: err.message }, 500);
+  } catch (err: unknown) {
+    return c.json({ error: getErrorMessage(err) }, 500)
   }
 })
 
@@ -313,8 +367,8 @@ app.post('/agents/:agent_id', async (c) => {
     if (ownershipError) return ownershipError;
     const body = await c.req.json().catch(() => ({}))
     return fetchAnthropic(c, `/agents/${c.req.param('agent_id')}`, { method: 'POST', body: JSON.stringify(body) })
-  } catch (err: any) {
-    return c.json({ error: err.message }, 500)
+  } catch (err: unknown) {
+    return c.json({ error: getErrorMessage(err) }, 500)
   }
 })
 
@@ -353,8 +407,7 @@ app.post('/sessions', async (c) => {
     })
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({})) as any;
-      return c.json({ error: errorData.error?.message || `Anthropic API Error: ${response.status} ${response.statusText}` }, response.status as any);
+      return handleAnthropicError(c, response);
     }
 
     const data: any = await response.json();
@@ -376,8 +429,8 @@ app.post('/sessions', async (c) => {
     }
 
     return c.json(data)
-  } catch (err: any) {
-    return c.json({ error: err.message }, 500)
+  } catch (err: unknown) {
+    return c.json({ error: getErrorMessage(err) }, 500)
   }
 })
 
@@ -388,8 +441,8 @@ app.get('/sessions', async (c) => {
       .bind(user.id)
       .all()
     return c.json({ data: results })
-  } catch (err: any) {
-    return c.json({ error: err.message }, 500)
+  } catch (err: unknown) {
+    return c.json({ error: getErrorMessage(err) }, 500)
   }
 })
 
@@ -405,8 +458,8 @@ app.post('/sessions/:session_id', async (c) => {
     if (ownershipError) return ownershipError;
     const body = await c.req.json().catch(() => ({}))
     return fetchAnthropic(c, `/sessions/${c.req.param('session_id')}`, { method: 'POST', body: JSON.stringify(body) })
-  } catch (err: any) {
-    return c.json({ error: err.message }, 500)
+  } catch (err: unknown) {
+    return c.json({ error: getErrorMessage(err) }, 500)
   }
 })
 
@@ -492,8 +545,8 @@ app.post('/sessions/:session_id/run', async (c) => {
         }
       }
     })
-  } catch (err: any) {
-    return c.json({ error: err.message }, 500)
+  } catch (err: unknown) {
+    return c.json({ error: getErrorMessage(err) }, 500)
   }
 })
 
@@ -509,8 +562,8 @@ app.post('/sessions/:session_id/events', async (c) => {
     if (ownershipError) return ownershipError;
     const body = await c.req.json().catch(() => ({}))
     return fetchAnthropic(c, `/sessions/${c.req.param('session_id')}/events`, { method: 'POST', body: JSON.stringify(body) })
-  } catch (err: any) {
-    return c.json({ error: err.message }, 500)
+  } catch (err: unknown) {
+    return c.json({ error: getErrorMessage(err) }, 500)
   }
 })
 
@@ -524,11 +577,11 @@ app.get('/sessions/:session_id/events/stream', async (c) => {
       })
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({})) as any;
+        const errorMessage = await parseAnthropicError(response);
         await stream.writeSSE({
-          data: JSON.stringify({ error: errorData.error?.message || `Error: ${response.status}` }),
+          data: JSON.stringify({ error: errorMessage }),
           event: 'error'
-        })
+        });
         return;
       }
 
@@ -579,8 +632,8 @@ app.post('/sessions/:session_id/resources', async (c) => {
     if (ownershipError) return ownershipError;
     const body = await c.req.json().catch(() => ({}))
     return fetchAnthropic(c, `/sessions/${c.req.param('session_id')}/resources`, { method: 'POST', body: JSON.stringify(body) })
-  } catch (err: any) {
-    return c.json({ error: err.message }, 500)
+  } catch (err: unknown) {
+    return c.json({ error: getErrorMessage(err) }, 500)
   }
 })
 
@@ -602,8 +655,8 @@ app.post('/sessions/:session_id/resources/:resource_id', async (c) => {
     if (ownershipError) return ownershipError;
     const body = await c.req.json().catch(() => ({}))
     return fetchAnthropic(c, `/sessions/${c.req.param('session_id')}/resources/${c.req.param('resource_id')}`, { method: 'POST', body: JSON.stringify(body) })
-  } catch (err: any) {
-    return c.json({ error: err.message }, 500)
+  } catch (err: unknown) {
+    return c.json({ error: getErrorMessage(err) }, 500)
   }
 })
 
@@ -647,8 +700,8 @@ app.post('/environments', async (c) => {
     }
 
     return response;
-  } catch (err: any) {
-    return c.json({ error: err.message }, 500)
+  } catch (err: unknown) {
+    return c.json({ error: getErrorMessage(err) }, 500)
   }
 })
 
@@ -672,15 +725,15 @@ app.get('/environments', async (c) => {
       return response;
     }
 
-    const data = await response.clone().json() as any;
+    const data = await response.json() as any;
     if (Array.isArray(data?.data)) {
       data.data = data.data.filter((environment: { id?: string }) => environment.id && ownedEnvironmentIds.has(environment.id));
     } else {
       data.data = [];
     }
     return c.json(data);
-  } catch (err: any) {
-    return c.json({ error: err.message }, 500);
+  } catch (err: unknown) {
+    return c.json({ error: getErrorMessage(err) }, 500)
   }
 })
 
@@ -696,8 +749,8 @@ app.post('/environments/:environment_id', async (c) => {
     if (ownershipError) return ownershipError;
     const body = await c.req.json().catch(() => ({}))
     return fetchAnthropic(c, `/environments/${c.req.param('environment_id')}`, { method: 'POST', body: JSON.stringify(body) })
-  } catch (err: any) {
-    return c.json({ error: err.message }, 500)
+  } catch (err: unknown) {
+    return c.json({ error: getErrorMessage(err) }, 500)
   }
 })
 
@@ -709,7 +762,7 @@ app.delete('/environments/:environment_id', async (c) => {
   if (response.ok) {
     try {
       await c.env.DB.prepare('DELETE FROM environments WHERE id = ?').bind(environmentId).run();
-    } catch (err) {
+    } catch (err: unknown) {
       console.error('Failed to delete local environment ownership after upstream deletion', err);
     }
   }
@@ -730,8 +783,8 @@ app.get('/mcp/connections', async (c) => {
     const user = c.get('user');
     const { results } = await c.env.DB.prepare('SELECT DISTINCT provider FROM oauth_tokens WHERE user_id = ?').bind(user.id).all();
     return c.json({ connections: results.map(r => r.provider) });
-  } catch (error: any) {
-    return c.json({ error: error.message }, 500);
+  } catch (error: unknown) {
+    return c.json({ error: getErrorMessage(error) }, 500)
   }
 });
 
@@ -748,8 +801,8 @@ app.get('/mcp/tools/:provider', async (c) => {
     }, { read_only: [], write_delete: [] });
 
     return c.json(tools);
-  } catch (error: any) {
-    return c.json({ error: error.message }, 500);
+  } catch (error: unknown) {
+    return c.json({ error: getErrorMessage(error) }, 500)
   }
 });
 
@@ -770,8 +823,8 @@ app.post('/mcp/tools/:provider/:tool_name', async (c) => {
       .run();
 
     return c.json({ success: true });
-  } catch (error: any) {
-    return c.json({ error: error.message }, 500);
+  } catch (error: unknown) {
+    return c.json({ error: getErrorMessage(error) }, 500)
   }
 });
 

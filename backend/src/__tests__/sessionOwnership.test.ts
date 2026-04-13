@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { TTLMemoryCache, ensureSessionOwnership } from '../index';
+import { TTLMemoryCache, LRUCache, ensureSessionOwnership } from '../index.js';
 import type { AppContext } from '../index.js';
 
 // Builds a minimal mock AppContext for testing ensureSessionOwnership.
@@ -20,38 +20,49 @@ function makeCtx(userId: string, dbResult: { user_id: string } | null, cacheInst
   } as unknown as AppContext & { prepareMock: ReturnType<typeof vi.fn> };
 }
 
-describe('TTLMemoryCache', () => {
+describe('LRUCache', () => {
   it('returns undefined for missing keys', () => {
-    const cache = new TTLMemoryCache(3);
+    const cache = new LRUCache<string, string>(3);
     expect(cache.get('missing')).toBeUndefined();
   });
 
   it('stores and retrieves values', () => {
-    const cache = new TTLMemoryCache(3);
-    cache.set('key', 'value', 60000);
+    const cache = new LRUCache<string, string>(3);
+    cache.set('key', 'value');
     expect(cache.get('key')).toBe('value');
   });
 
   it('evicts the least-recently-used entry when maxSize is exceeded', () => {
-    const cache = new TTLMemoryCache(2);
-    cache.set('a', '1', 60000);
-    cache.set('b', '2', 60000);
+    const cache = new LRUCache<string, string>(2);
+    cache.set('a', '1');
+    cache.set('b', '2');
     // 'a' is LRU; adding 'c' should evict 'a'
-    cache.set('c', '3', 60000);
+    cache.set('c', '3');
     expect(cache.get('a')).toBeUndefined();
     expect(cache.get('b')).toBe('2');
     expect(cache.get('c')).toBe('3');
   });
 
-
+  it('promotes a get-accessed entry to most-recently-used, protecting it from eviction', () => {
+    const cache = new LRUCache<string, string>(2);
+    cache.set('a', '1');
+    cache.set('b', '2');
+    // Access 'a' so it becomes MRU; 'b' becomes LRU
+    cache.get('a');
+    // Adding 'c' should evict 'b', not 'a'
+    cache.set('c', '3');
+    expect(cache.get('b')).toBeUndefined();
+    expect(cache.get('a')).toBe('1');
+    expect(cache.get('c')).toBe('3');
+  });
 
   it('overwrites an existing key without changing the cache size', () => {
-    const cache = new TTLMemoryCache(2);
-    cache.set('a', '1', 60000);
-    cache.set('a', '2', 60000);
+    const cache = new LRUCache<string, string>(2);
+    cache.set('a', '1');
+    cache.set('a', '2');
     expect(cache.get('a')).toBe('2');
     // Only one entry should exist; adding 'b' should not evict anything
-    cache.set('b', '3', 60000);
+    cache.set('b', '3');
     expect(cache.get('a')).toBe('2');
     expect(cache.get('b')).toBe('3');
   });
@@ -85,7 +96,8 @@ describe('ensureSessionOwnership', () => {
   it('queries the DB only on the first lookup; subsequent calls use the cache', async () => {
     // Use a unique session ID to avoid interference from the module-level cache
     const sessionId = `sess-cache-${Math.random()}`;
-    const ctx = makeCtx('user-4', { user_id: 'user-4' });
+    const cache = new TTLMemoryCache();
+    const ctx = makeCtx('user-4', { user_id: 'user-4' }, cache);
     const { prepareMock } = ctx as unknown as { prepareMock: ReturnType<typeof vi.fn> };
 
     // First call — should hit the DB

@@ -447,16 +447,21 @@ app.post('/sessions/:session_id/run', async (c) => {
 
     return streamSSE(c, async (stream) => {
       if (events.length > 0) {
-        try {
-          await client.beta.sessions.events.send(sessionId, { events });
-        } catch (err: any) {
-          await stream.writeSSE({
+        // Send events asynchronously without awaiting so the stream can start processing them immediately.
+        // Use void to explicitly discard the returned Promise (fire-and-forget with handled rejection).
+        void client.beta.sessions.events.send(sessionId, { events }).catch((err: any) => {
+          console.error('Error sending events to stream:', err);
+          // Abort the session stream so the for-await loop below terminates instead of hanging.
+          sessionStream.controller.abort();
+          stream.writeSSE({
             data: JSON.stringify({ error: err.message }),
             event: 'error',
+          }).catch(() => {
+            // Ignore stream write errors if connection already closed
           });
-          return;
-        }
+        });
       }
+
       try {
         for await (const event of sessionStream) {
           await stream.writeSSE({
@@ -466,10 +471,14 @@ app.post('/sessions/:session_id/run', async (c) => {
           });
         }
       } catch (err: any) {
-        await stream.writeSSE({
-          data: JSON.stringify({ error: err.message }),
-          event: 'error',
-        })
+        // If the stream was intentionally aborted (due to events.send failure above),
+        // skip writing a duplicate/misleading error event — the catch above already sent one.
+        if (!sessionStream.controller.signal.aborted) {
+          await stream.writeSSE({
+            data: JSON.stringify({ error: err.message }),
+            event: 'error',
+          });
+        }
       }
     })
   } catch (err: any) {

@@ -101,7 +101,7 @@ function App() {
         ]);
       }
     } catch (err) {
-      console.error('Failed to create session:', err);
+      logApiError('Failed to create session')(err);
     }
   };
 

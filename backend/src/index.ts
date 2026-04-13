@@ -390,7 +390,7 @@ app.post('/agents', async (c) => {
         await c.env.DB.prepare('INSERT INTO agents (id, user_id) VALUES (?, ?)')
           .bind(data.id, user.id)
           .run();
-      } catch (err: any) {
+      } catch (err: unknown) {
         await archiveUpstreamResource(c, 'agents', data.id, 'Failed to persist local agent ownership after upstream create');
         if (isConstraintError(err)) {
           return c.json({ error: 'Agent already exists' }, 409);
@@ -503,7 +503,7 @@ app.post('/sessions', async (c) => {
         await c.env.DB.prepare('INSERT INTO sessions (id, user_id) VALUES (?, ?)')
           .bind(data.id, user.id)
           .run()
-      } catch (err: any) {
+      } catch (err: unknown) {
         await archiveUpstreamResource(c, 'sessions', data.id, 'Failed to persist local session ownership after upstream create');
         if (isConstraintError(err)) {
           return c.json({ error: 'Failed to store session mapping due to a session ID conflict.' }, 409);
@@ -662,15 +662,15 @@ app.get('/sessions/:session_id/events/stream', async (c) => {
                 event: 'message',
                 id: String(Date.now())
               });
-            } catch (e) {
+            } catch {
               // ignore parse errors for partial chunks
             }
           }
         }
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       await stream.writeSSE({
-        data: JSON.stringify({ error: err.message }),
+        data: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }),
         event: 'error',
       })
     }
@@ -741,7 +741,7 @@ app.post('/environments', async (c) => {
         await c.env.DB.prepare('INSERT INTO environments (id, user_id) VALUES (?, ?)')
           .bind(data.id, user.id)
           .run();
-      } catch (err: any) {
+      } catch (err: unknown) {
         await archiveUpstreamResource(c, 'environments', data.id, 'Failed to persist local environment ownership after upstream create');
         if (isConstraintError(err)) {
           return c.json({ error: 'Environment already exists' }, 409);
@@ -834,6 +834,9 @@ app.post('/environments/:environment_id/archive', async (c) => {
 app.get('/mcp/connections', async (c) => {
   try {
     const user = c.get('user');
+    if (!user.roles?.includes('admin')) {
+      return c.json({ error: 'Forbidden: Admin access required' }, 403);
+    }
     const { results } = await c.env.DB.prepare('SELECT DISTINCT provider FROM oauth_tokens WHERE user_id = ?').bind(user.id).all();
     return c.json({ connections: results.map(r => r.provider) });
   } catch (error: unknown) {
@@ -843,6 +846,10 @@ app.get('/mcp/connections', async (c) => {
 
 app.get('/mcp/tools/:provider', async (c) => {
   try {
+    const user = c.get('user');
+    if (!user.roles?.includes('admin')) {
+      return c.json({ error: 'Forbidden: Admin access required' }, 403);
+    }
     const provider = c.req.param('provider');
     const { results } = await c.env.DB.prepare('SELECT tool_name, type, permission FROM global_tool_permissions WHERE provider = ?').bind(provider).all();
 

@@ -81,10 +81,8 @@ describe('ChatWindow', () => {
   });
 
   it('submits a user message and streams an agent response', async () => {
-    // Note: The component updates state based on ID tracking for the same event
-    // The chunks text need to just be 'Hello' and then 'Hello World!' to simulate how SSE works
-    // In our component, we append the content using textContent in state if id matches. Wait,
-    // actually our component replaces `content` when `currentAgentMsgId` is matching.
+    // Simulate SSE updates for the same agent message by sending cumulative text
+    // so the rendered content changes from 'Hello' to 'Hello World!'.
     const chunks = [
       `data: {"type":"agent.message","content":[{"type":"text","text":"Hello"}]}\n\n`,
       `data: {"type":"agent.message","content":[{"type":"text","text":"Hello World!"}]}\n\n`,

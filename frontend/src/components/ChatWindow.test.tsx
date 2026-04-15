@@ -182,8 +182,7 @@ describe('ChatWindow', () => {
 
   it('aborts previous request when a new message is submitted', async () => {
     // For this test, we need a stream that never finishes quickly
-    let abortResolver: any;
-    const abortPromise = new Promise(resolve => { abortResolver = resolve; });
+    const abortPromise = new Promise<never>(() => {});
 
     const reader = {
       read: vi.fn().mockImplementation(() => abortPromise)

@@ -5,6 +5,7 @@ const getErrorMessage = (error: unknown): string => error instanceof Error ? err
 import { RealtimeStateObject } from './durable-object'
 import { Anthropic } from '@anthropic-ai/sdk'
 import { jwtVerify, createRemoteJWKSet } from 'jose'
+import { processSessionStream } from './stream'
 
 export type Bindings = {
   DB: D1Database
@@ -18,8 +19,52 @@ export type Bindings = {
   AUTH_BYPASS_FOR_DEV?: string
 }
 
+export class TTLMemoryCache {
+  private cache = new Map<string, { value: string; expires: number }>();
+  private readonly maxSize: number;
+
+  constructor(maxSize: number = 1000) {
+    this.maxSize = maxSize;
+  }
+
+  get(key: string): string | undefined {
+    const item = this.cache.get(key);
+    if (!item) return undefined;
+    if (Date.now() > item.expires) {
+      this.cache.delete(key);
+      return undefined;
+    }
+    return item.value;
+  }
+
+  set(key: string, value: string, ttl: number) {
+    if (this.cache.size >= this.maxSize) {
+      // Lazy eviction for space: delete the first expired item found,
+      // or simply the first item (oldest inserted) if none are expired.
+      for (const [k, v] of this.cache.entries()) {
+        if (Date.now() > v.expires) {
+          this.cache.delete(k);
+          break;
+        }
+      }
+      if (this.cache.size >= this.maxSize) {
+        const firstKey = this.cache.keys().next().value;
+        if (firstKey !== undefined) {
+            this.cache.delete(firstKey);
+        }
+      }
+    }
+    this.cache.set(key, { value, expires: Date.now() + ttl });
+  }
+
+  delete(key: string): void {
+    this.cache.delete(key);
+  }
+}
+
 type Variables = {
   user: { id: string; roles?: string[] }
+  cache: TTLMemoryCache
 }
 
 export type AppContext = Context<{ Bindings: Bindings; Variables: Variables }>
@@ -32,6 +77,7 @@ app.onError((err, c) => {
 
 let jwks: ReturnType<typeof createRemoteJWKSet> | undefined;
 let jwksIssuer: string | undefined;
+const globalCache = new TTLMemoryCache();
 // SQLite SQLITE_CONSTRAINT error code.
 const SQLITE_CONSTRAINT_ERROR_CODE = '19';
 
@@ -70,7 +116,7 @@ export const getOktaIssuer = (domain: string, configuredIssuer?: string) => {
   return `https://${normalizeOktaDomain(domain)}/oauth2/default`;
 };
 
-const getOktaAudience = (configuredAudience?: string, clientId?: string) =>
+export const getOktaAudience = (configuredAudience?: string, clientId?: string) =>
   configuredAudience ?? clientId;
 
 const getUser = (c: AppContext): { id: string } => c.get('user');
@@ -112,21 +158,45 @@ export class LRUCache<K, V> {
   }
 }
 
-export const sessionOwnershipCache = new LRUCache<string, string>(1000);
-
 const ensureAgentOwnership = async (c: AppContext, agentId: string): Promise<Response | undefined> => {
   const user = getUser(c);
-  const owner = await c.env.DB.prepare('SELECT user_id FROM agents WHERE id = ?')
-    .bind(agentId)
-    .first<{ user_id: string }>();
+  const cacheObj = c.get('cache');
+  const cacheKey = `agent_owner_${agentId}`;
+  let ownerId = cacheObj?.get(cacheKey);
 
-  if (!owner || owner.user_id !== user.id) {
+  if (!ownerId) {
+    const owner = await c.env.DB.prepare('SELECT user_id FROM agents WHERE id = ?')
+      .bind(agentId)
+      .first<{ user_id: string }>();
+    if (owner) {
+      ownerId = owner.user_id;
+      // Cache ownership check for 1 minute (60,000 ms)
+      cacheObj?.set(cacheKey, ownerId, 60000);
+    }
+  }
+
+  if (!ownerId || ownerId !== user.id) {
     return c.json({ error: 'Agent not found or unauthorized' }, 403);
   }
 };
 
 export const ensureSessionOwnership = async (c: AppContext, sessionId: string): Promise<Response | undefined> => {
   const user = getUser(c);
+  const cacheObj = c.get('cache');
+  const cacheKey = `session_owner_${sessionId}`;
+  let ownerId = cacheObj?.get(cacheKey);
+
+  if (!ownerId) {
+    const owner = await c.env.DB.prepare('SELECT user_id FROM sessions WHERE id = ?')
+      .bind(sessionId)
+      .first<{ user_id: string }>();
+    if (owner) {
+      ownerId = owner.user_id;
+      cacheObj?.set(cacheKey, ownerId, 60000);
+    }
+  }
+
+  if (!ownerId || ownerId !== user.id) {
 
   let ownerUserId = sessionOwnershipCache.get(sessionId);
 
@@ -148,11 +218,21 @@ export const ensureSessionOwnership = async (c: AppContext, sessionId: string): 
 
 const ensureEnvironmentOwnership = async (c: AppContext, environmentId: string): Promise<Response | undefined> => {
   const user = getUser(c);
-  const owner = await c.env.DB.prepare('SELECT user_id FROM environments WHERE id = ?')
-    .bind(environmentId)
-    .first<{ user_id: string }>();
+  const cacheObj = c.get('cache');
+  const cacheKey = `env_owner_${environmentId}`;
+  let ownerId = cacheObj?.get(cacheKey);
 
-  if (!owner || owner.user_id !== user.id) {
+  if (!ownerId) {
+    const owner = await c.env.DB.prepare('SELECT user_id FROM environments WHERE id = ?')
+      .bind(environmentId)
+      .first<{ user_id: string }>();
+    if (owner) {
+      ownerId = owner.user_id;
+      cacheObj?.set(cacheKey, ownerId, 60000);
+    }
+  }
+
+  if (!ownerId || ownerId !== user.id) {
     return c.json({ error: 'Environment not found or unauthorized' }, 403);
   }
 };
@@ -179,6 +259,7 @@ const archiveUpstreamResource = async (
 
 // Auth Middleware
 app.use('*', async (c, next) => {
+  c.set('cache', globalCache);
   if (!c.env.OKTA_DOMAIN) {
     if (c.env.AUTH_BYPASS_FOR_DEV === 'true') {
       c.set('user', { id: 'user-123', roles: ['admin'] });
@@ -302,16 +383,19 @@ app.post('/agents', async (c) => {
     return handleAnthropicError(c, response);
   }
 
-  const data: any = await response.json();
-  if (data.id) {
-    try {
-      await c.env.DB.prepare('INSERT INTO agents (id, user_id) VALUES (?, ?)')
-        .bind(data.id, user.id)
-        .run();
-    } catch (err: any) {
-      await archiveUpstreamResource(c, 'agents', data.id, 'Failed to persist local agent ownership after upstream create');
-      if (isConstraintError(err)) {
-        return c.json({ error: 'Agent already exists' }, 409);
+    const data: any = await response.json();
+    if (data.id) {
+      try {
+        await c.env.DB.prepare('INSERT INTO agents (id, user_id) VALUES (?, ?)')
+          .bind(data.id, user.id)
+          .run();
+      } catch (err: unknown) {
+        await archiveUpstreamResource(c, 'agents', data.id, 'Failed to persist local agent ownership after upstream create');
+        if (isConstraintError(err)) {
+          return c.json({ error: 'Agent already exists' }, 409);
+        }
+        console.error('Failed to store local agent ownership after creating agent', err);
+        return c.json({ error: 'Failed to store local agent ownership after creating agent' }, 500);
       }
       console.error('Failed to store local agent ownership after creating agent', err);
       return c.json({ error: 'Failed to store local agent ownership after creating agent' }, 500);
@@ -401,18 +485,21 @@ app.post('/sessions', async (c) => {
     return handleAnthropicError(c, response);
   }
 
-  const data: any = await response.json();
+    const data: any = await response.json();
 
-  // Store mapping in D1
-  if (data.id) {
-    try {
-      await c.env.DB.prepare('INSERT INTO sessions (id, user_id) VALUES (?, ?)')
-        .bind(data.id, user.id)
-        .run()
-    } catch (err: any) {
-      await archiveUpstreamResource(c, 'sessions', data.id, 'Failed to persist local session ownership after upstream create');
-      if (isConstraintError(err)) {
-        return c.json({ error: 'Failed to store session mapping due to a session ID conflict.' }, 409);
+    // Store mapping in D1
+    if (data.id) {
+      try {
+        await c.env.DB.prepare('INSERT INTO sessions (id, user_id) VALUES (?, ?)')
+          .bind(data.id, user.id)
+          .run()
+      } catch (err: unknown) {
+        await archiveUpstreamResource(c, 'sessions', data.id, 'Failed to persist local session ownership after upstream create');
+        if (isConstraintError(err)) {
+          return c.json({ error: 'Failed to store session mapping due to a session ID conflict.' }, 409);
+        }
+        console.error('Failed to store local session ownership after creating session', err);
+        return c.json({ error: 'Failed to store local session ownership after creating session' }, 500);
       }
       console.error('Failed to store local session ownership after creating session', err);
       return c.json({ error: 'Failed to store local session ownership after creating session' }, 500);
@@ -582,15 +669,15 @@ app.get('/sessions/:session_id/events/stream', async (c) => {
                 event: 'message',
                 id: String(Date.now())
               });
-            } catch (e) {
+            } catch {
               // ignore parse errors for partial chunks
             }
           }
         }
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       await stream.writeSSE({
-        data: JSON.stringify({ error: err.message }),
+        data: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }),
         event: 'error',
       })
     }
@@ -644,18 +731,21 @@ app.post('/environments', async (c) => {
     return response;
   }
 
-  // Clone the response so we can read it and still return it.
-  const data = await response.clone().json() as any;
+    // Clone the response so we can read it and still return it.
+    const data = await response.clone().json() as any;
 
-  if (data.id) {
-    try {
-      await c.env.DB.prepare('INSERT INTO environments (id, user_id) VALUES (?, ?)')
-        .bind(data.id, user.id)
-        .run();
-    } catch (err: any) {
-      await archiveUpstreamResource(c, 'environments', data.id, 'Failed to persist local environment ownership after upstream create');
-      if (isConstraintError(err)) {
-        return c.json({ error: 'Environment already exists' }, 409);
+    if (data.id) {
+      try {
+        await c.env.DB.prepare('INSERT INTO environments (id, user_id) VALUES (?, ?)')
+          .bind(data.id, user.id)
+          .run();
+      } catch (err: unknown) {
+        await archiveUpstreamResource(c, 'environments', data.id, 'Failed to persist local environment ownership after upstream create');
+        if (isConstraintError(err)) {
+          return c.json({ error: 'Environment already exists' }, 409);
+        }
+        console.error('Failed to store local environment ownership after creating environment', err);
+        return c.json({ error: 'Failed to store local environment ownership after creating environment' }, 500);
       }
       console.error('Failed to store local environment ownership after creating environment', err);
       return c.json({ error: 'Failed to store local environment ownership after creating environment' }, 500);
@@ -717,6 +807,7 @@ app.delete('/environments/:environment_id', async (c) => {
     } catch (err: unknown) {
       console.error('Failed to delete local environment ownership after upstream deletion', err);
     }
+    c.get('cache').delete(`env_owner_${environmentId}`);
   }
   return response;
 })
@@ -731,14 +822,26 @@ app.post('/environments/:environment_id/archive', async (c) => {
 
 // ----- MCP Connections & Tools Endpoints -----
 app.get('/mcp/connections', async (c) => {
-  const user = c.get('user');
-  const { results } = await c.env.DB.prepare('SELECT DISTINCT provider FROM oauth_tokens WHERE user_id = ?').bind(user.id).all();
-  return c.json({ connections: results.map(r => r.provider) });
+  try {
+    const user = c.get('user');
+    if (!user.roles?.includes('admin')) {
+      return c.json({ error: 'Forbidden: Admin access required' }, 403);
+    }
+    const { results } = await c.env.DB.prepare('SELECT DISTINCT provider FROM oauth_tokens WHERE user_id = ?').bind(user.id).all();
+    return c.json({ connections: results.map(r => r.provider) });
+  } catch (error: unknown) {
+    return c.json({ error: getErrorMessage(error) }, 500)
+  }
 });
 
 app.get('/mcp/tools/:provider', async (c) => {
-  const provider = c.req.param('provider');
-  const { results } = await c.env.DB.prepare('SELECT tool_name, type, permission FROM global_tool_permissions WHERE provider = ?').bind(provider).all();
+  try {
+    const user = c.get('user');
+    if (!user.roles?.includes('admin')) {
+      return c.json({ error: 'Forbidden: Admin access required' }, 403);
+    }
+    const provider = c.req.param('provider');
+    const { results } = await c.env.DB.prepare('SELECT tool_name, type, permission FROM global_tool_permissions WHERE provider = ?').bind(provider).all();
 
   // Group tools by type
   const tools = results.reduce((acc: any, tool: any) => {

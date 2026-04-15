@@ -129,16 +129,17 @@ export function ChatWindow({ sessionId, onClose }: ChatWindowProps) {
                  // For MCP tool use the session continues streaming; reset for next agent message
                  currentAgentMsgId = null;
               }
-            } catch (e) {
+            } catch {
               // Ignore parse errors
             }
           }
         }
       }
-    } catch (err: any) {
-      if (err.name === 'AbortError') return;
+    } catch (err: unknown) {
+      if (typeof err === 'object' && err !== null && 'name' in err && (err as { name: unknown }).name === 'AbortError') return;
       console.error(err);
-      setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'agent', content: err.message || 'Error: Connection failed.' }]);
+      const errorMessage = err instanceof Error ? err.message : 'Error: Connection failed.';
+      setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'agent', content: errorMessage }]);
     } finally {
       setIsRunning(false);
       abortControllerRef.current = null;

@@ -17,7 +17,7 @@ describe('agentsApi', () => {
     vi.clearAllMocks();
   });
 
-  const mockFetchSuccess = (data: unknown) => {
+  const mockFetchSuccess = (data: any) => {
     (globalThis.fetch as Mock).mockResolvedValueOnce({
       ok: true,
       json: async () => data,

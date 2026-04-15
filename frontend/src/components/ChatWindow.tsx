@@ -85,10 +85,15 @@ export function ChatWindow({ sessionId, onClose }: ChatWindowProps) {
 
               if (event.type === 'agent.message') {
                 const textContent = Array.isArray(event.content)
-                  ? event.content
-                      .filter((block: { type?: string; text?: string }) => block?.type === 'text' && typeof block.text === 'string')
-                      .map((block: { type?: string; text?: string }) => block.text as string)
-                      .join('')
+                  ? (() => {
+                      const parts: string[] = [];
+                      for (const block of event.content as Array<{ type?: string; text?: string }>) {
+                        if (block?.type === 'text' && typeof block.text === 'string') {
+                          parts.push(block.text);
+                        }
+                      }
+                      return parts.join('');
+                    })()
                   : '';
 
                 if (textContent) {

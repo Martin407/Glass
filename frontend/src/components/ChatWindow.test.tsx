@@ -66,11 +66,13 @@ describe('ChatWindow', () => {
   });
 
   it('calls onClose when close button is clicked', () => {
-    const { container } = render(<ChatWindow sessionId={sessionId} onClose={mockOnClose} />);
+    render(<ChatWindow sessionId={sessionId} onClose={mockOnClose} />);
 
-    // Find close button - it's the first button with X icon which does not have a role name
-    // It has click handler onClose
-    const closeBtn = container.querySelector('button.text-gray-500');
+    // Find the close button without relying on styling classes.
+    // The submit button has type="submit", so the remaining button is the close button.
+    const closeBtn = screen.getAllByRole('button').find(
+      (button) => button.getAttribute('type') !== 'submit'
+    );
     expect(closeBtn).toBeInTheDocument();
 
     fireEvent.click(closeBtn!);

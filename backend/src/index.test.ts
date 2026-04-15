@@ -129,6 +129,22 @@ describe('Okta Issuer Configuration', () => {
       expect(() => getOktaIssuer('example.okta.com/path')).toThrow('OKTA_DOMAIN must not include a path, query, or fragment');
     });
   });
+
+  describe('getOktaAudience', () => {
+    it('should return configuredAudience if it is provided', () => {
+      expect(getOktaAudience('custom-audience', 'client-id-123')).toBe('custom-audience');
+      expect(getOktaAudience('custom-audience')).toBe('custom-audience');
+    });
+
+    it('should return clientId if configuredAudience is undefined', () => {
+      expect(getOktaAudience(undefined, 'client-id-123')).toBe('client-id-123');
+    });
+
+    it('should return undefined if both are undefined', () => {
+      expect(getOktaAudience(undefined, undefined)).toBeUndefined();
+      expect(getOktaAudience()).toBeUndefined();
+    });
+  });
 });
 
 describe('archiveUpstreamResource', () => {

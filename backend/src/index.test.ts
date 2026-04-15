@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { getOktaIssuer, getOktaAudience, normalizeOktaDomain, normalizeIssuer, parseAnthropicError, handleAnthropicError } from './index';
+import { describe, it, expect, vi } from 'vitest';
+import { getOktaIssuer, normalizeOktaDomain, normalizeIssuer, parseAnthropicError, handleAnthropicError, archiveUpstreamResource } from './index';
 
 describe('Anthropic Error Handling Utilities', () => {
   describe('parseAnthropicError', () => {
@@ -144,5 +144,45 @@ describe('Okta Issuer Configuration', () => {
       expect(getOktaAudience(undefined, undefined)).toBeUndefined();
       expect(getOktaAudience()).toBeUndefined();
     });
+  });
+});
+
+describe('archiveUpstreamResource', () => {
+  it('should fall back to a specific error string when upstream JSON parsing fails', async () => {
+    // Create a mock context with user matching the expected shape { id: string }
+    const c = {
+      get: (key: string) => {
+        if (key === 'user') return { id: 'test-okta-id' };
+        return null;
+      },
+      env: {
+        ANTHROPIC_API_KEY: 'test-api-key'
+      }
+    } as any;
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 502,
+      json: vi.fn().mockRejectedValue(new Error('Invalid JSON'))
+    }));
+
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      await archiveUpstreamResource(c, 'agents', 'agent-123', 'Test error context');
+
+      expect(fetch).toHaveBeenCalledWith(
+        'https://api.anthropic.com/v1/agents/agent-123/archive',
+        expect.objectContaining({ method: 'POST' })
+      );
+
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        'Test error context: upstream archive failed with 502',
+        'Unable to parse upstream archive error response'
+      );
+    } finally {
+      vi.unstubAllGlobals();
+      consoleErrorSpy.mockRestore();
+    }
   });
 });

@@ -71,6 +71,10 @@ export type AppContext = Context<{ Bindings: Bindings; Variables: Variables }>
 
 export const app = new Hono<{ Bindings: Bindings; Variables: Variables }>()
 
+app.onError((err, c) => {
+  return c.json({ error: getErrorMessage(err) }, 500)
+})
+
 let jwks: ReturnType<typeof createRemoteJWKSet> | undefined;
 let jwksIssuer: string | undefined;
 const globalCache = new TTLMemoryCache();
@@ -341,25 +345,21 @@ const fetchAnthropic = async (c: AppContext, endpoint: string, options: RequestI
   if (!c.env.ANTHROPIC_API_KEY) {
     return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 500);
   }
-  try {
-    const response = await fetch(`https://api.anthropic.com/v1${endpoint}`, {
-      ...options,
-      headers: {
-        ...getAnthropicHeaders(c),
-        ...options.headers,
-      }
-    })
-
-    if (!response.ok) {
-      return handleAnthropicError(c, response);
+  const response = await fetch(`https://api.anthropic.com/v1${endpoint}`, {
+    ...options,
+    headers: {
+      ...getAnthropicHeaders(c),
+      ...options.headers,
     }
+  })
 
-    // For DELETE operations, response might be empty or specific JSON
-    const data = await response.json().catch(() => ({}));
-    return c.json(data);
-  } catch (error: unknown) {
-    return c.json({ error: getErrorMessage(error) }, 500)
+  if (!response.ok) {
+    return handleAnthropicError(c, response);
   }
+
+  // For DELETE operations, response might be empty or specific JSON
+  const data = await response.json().catch(() => ({}));
+  return c.json(data);
 }
 
 app.get('/', (c) => {
@@ -368,21 +368,20 @@ app.get('/', (c) => {
 
 // ----- Agents Endpoints -----
 app.post('/agents', async (c) => {
-  try {
-    if (!c.env.ANTHROPIC_API_KEY) {
-      return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 500);
-    }
-    const user = getUser(c);
-    const body = await c.req.json().catch(() => ({}))
-    const response = await fetch(`https://api.anthropic.com/v1/agents`, {
-      method: 'POST',
-      body: JSON.stringify(body),
-      headers: getAnthropicHeaders(c)
-    });
+  if (!c.env.ANTHROPIC_API_KEY) {
+    return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 500);
+  }
+  const user = getUser(c);
+  const body = await c.req.json().catch(() => ({}))
+  const response = await fetch(`https://api.anthropic.com/v1/agents`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+    headers: getAnthropicHeaders(c)
+  });
 
-    if (!response.ok) {
-      return handleAnthropicError(c, response);
-    }
+  if (!response.ok) {
+    return handleAnthropicError(c, response);
+  }
 
     const data: any = await response.json();
     if (data.id) {
@@ -398,46 +397,42 @@ app.post('/agents', async (c) => {
         console.error('Failed to store local agent ownership after creating agent', err);
         return c.json({ error: 'Failed to store local agent ownership after creating agent' }, 500);
       }
+      console.error('Failed to store local agent ownership after creating agent', err);
+      return c.json({ error: 'Failed to store local agent ownership after creating agent' }, 500);
     }
-
-    return c.json(data);
-  } catch (err: unknown) {
-    return c.json({ error: getErrorMessage(err) }, 500)
   }
+
+  return c.json(data);
 })
 
 app.get('/agents', async (c) => {
-  try {
-    if (!c.env.ANTHROPIC_API_KEY) {
-      return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 500);
-    }
-    const user = getUser(c);
-    const { results } = await c.env.DB.prepare('SELECT id FROM agents WHERE user_id = ?')
-      .bind(user.id)
-      .all<{ id: string }>();
-    const ownedAgentIds = new Set(results.map((row: { id: string }) => row.id));
-    if (ownedAgentIds.size === 0) {
-      return c.json({ data: [] });
-    }
-
-    const response = await fetch(`https://api.anthropic.com/v1/agents`, {
-      headers: getAnthropicHeaders(c)
-    });
-
-    if (!response.ok) {
-      return handleAnthropicError(c, response);
-    }
-
-    const data: any = await response.json();
-    if (Array.isArray(data?.data)) {
-      data.data = data.data.filter((agent: { id?: string }) => agent.id && ownedAgentIds.has(agent.id));
-    } else {
-      data.data = [];
-    }
-    return c.json(data);
-  } catch (err: unknown) {
-    return c.json({ error: getErrorMessage(err) }, 500)
+  if (!c.env.ANTHROPIC_API_KEY) {
+    return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 500);
   }
+  const user = getUser(c);
+  const { results } = await c.env.DB.prepare('SELECT id FROM agents WHERE user_id = ?')
+    .bind(user.id)
+    .all<{ id: string }>();
+  const ownedAgentIds = new Set(results.map((row: { id: string }) => row.id));
+  if (ownedAgentIds.size === 0) {
+    return c.json({ data: [] });
+  }
+
+  const response = await fetch(`https://api.anthropic.com/v1/agents`, {
+    headers: getAnthropicHeaders(c)
+  });
+
+  if (!response.ok) {
+    return handleAnthropicError(c, response);
+  }
+
+  const data: any = await response.json();
+  if (Array.isArray(data?.data)) {
+    data.data = data.data.filter((agent: { id?: string }) => agent.id && ownedAgentIds.has(agent.id));
+  } else {
+    data.data = [];
+  }
+  return c.json(data);
 })
 
 app.get('/agents/:agent_id', async (c) => {
@@ -447,14 +442,10 @@ app.get('/agents/:agent_id', async (c) => {
 })
 
 app.post('/agents/:agent_id', async (c) => {
-  try {
-    const ownershipError = await ensureAgentOwnership(c, c.req.param('agent_id'));
-    if (ownershipError) return ownershipError;
-    const body = await c.req.json().catch(() => ({}))
-    return fetchAnthropic(c, `/agents/${c.req.param('agent_id')}`, { method: 'POST', body: JSON.stringify(body) })
-  } catch (err: unknown) {
-    return c.json({ error: getErrorMessage(err) }, 500)
-  }
+  const ownershipError = await ensureAgentOwnership(c, c.req.param('agent_id'));
+  if (ownershipError) return ownershipError;
+  const body = await c.req.json().catch(() => ({}))
+  return fetchAnthropic(c, `/agents/${c.req.param('agent_id')}`, { method: 'POST', body: JSON.stringify(body) })
 })
 
 app.post('/agents/:agent_id/archive', async (c) => {
@@ -471,29 +462,28 @@ app.get('/agents/:agent_id/versions', async (c) => {
 
 // ----- Sessions Endpoints -----
 app.post('/sessions', async (c) => {
-  try {
-    if (!c.env.ANTHROPIC_API_KEY) {
-      return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 500)
-    }
-    const user = getUser(c)
-    const body = await c.req.json().catch(() => ({}))
-    const agentId = typeof body?.agent_id === 'string' ? body.agent_id : undefined;
-    if (!agentId) {
-      return c.json({ error: 'agent_id is required' }, 400);
-    }
-    const ownershipError = await ensureAgentOwnership(c, agentId);
-    if (ownershipError) return ownershipError;
+  if (!c.env.ANTHROPIC_API_KEY) {
+    return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 500)
+  }
+  const user = getUser(c)
+  const body = await c.req.json().catch(() => ({}))
+  const agentId = typeof body?.agent_id === 'string' ? body.agent_id : undefined;
+  if (!agentId) {
+    return c.json({ error: 'agent_id is required' }, 400);
+  }
+  const ownershipError = await ensureAgentOwnership(c, agentId);
+  if (ownershipError) return ownershipError;
 
-    // Create session in Anthropic
-    const response = await fetch(`https://api.anthropic.com/v1/sessions`, {
-      method: 'POST',
-      body: JSON.stringify(body),
-      headers: getAnthropicHeaders(c)
-    })
+  // Create session in Anthropic
+  const response = await fetch(`https://api.anthropic.com/v1/sessions`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+    headers: getAnthropicHeaders(c)
+  })
 
-    if (!response.ok) {
-      return handleAnthropicError(c, response);
-    }
+  if (!response.ok) {
+    return handleAnthropicError(c, response);
+  }
 
     const data: any = await response.json();
 
@@ -511,24 +501,20 @@ app.post('/sessions', async (c) => {
         console.error('Failed to store local session ownership after creating session', err);
         return c.json({ error: 'Failed to store local session ownership after creating session' }, 500);
       }
+      console.error('Failed to store local session ownership after creating session', err);
+      return c.json({ error: 'Failed to store local session ownership after creating session' }, 500);
     }
-
-    return c.json(data)
-  } catch (err: unknown) {
-    return c.json({ error: getErrorMessage(err) }, 500)
   }
+
+  return c.json(data)
 })
 
 app.get('/sessions', async (c) => {
-  try {
-    const user = c.get('user')
-    const { results } = await c.env.DB.prepare('SELECT id, created_at FROM sessions WHERE user_id = ?')
-      .bind(user.id)
-      .all()
-    return c.json({ data: results })
-  } catch (err: unknown) {
-    return c.json({ error: getErrorMessage(err) }, 500)
-  }
+  const user = c.get('user')
+  const { results } = await c.env.DB.prepare('SELECT id, created_at FROM sessions WHERE user_id = ?')
+    .bind(user.id)
+    .all()
+  return c.json({ data: results })
 })
 
 app.get('/sessions/:session_id', async (c) => {
@@ -538,14 +524,10 @@ app.get('/sessions/:session_id', async (c) => {
 })
 
 app.post('/sessions/:session_id', async (c) => {
-  try {
-    const ownershipError = await ensureSessionOwnership(c, c.req.param('session_id'));
-    if (ownershipError) return ownershipError;
-    const body = await c.req.json().catch(() => ({}))
-    return fetchAnthropic(c, `/sessions/${c.req.param('session_id')}`, { method: 'POST', body: JSON.stringify(body) })
-  } catch (err: unknown) {
-    return c.json({ error: getErrorMessage(err) }, 500)
-  }
+  const ownershipError = await ensureSessionOwnership(c, c.req.param('session_id'));
+  if (ownershipError) return ownershipError;
+  const body = await c.req.json().catch(() => ({}))
+  return fetchAnthropic(c, `/sessions/${c.req.param('session_id')}`, { method: 'POST', body: JSON.stringify(body) })
 })
 
 app.delete('/sessions/:session_id', async (c) => {
@@ -563,43 +545,72 @@ app.post('/sessions/:session_id/archive', async (c) => {
 // ----- Session Events Endpoints -----
 
 app.post('/sessions/:session_id/run', async (c) => {
-  try {
-    const sessionId = c.req.param('session_id')
-    const { message } = await c.req.json().catch(() => ({}))
-    const user = getUser(c);
+  const sessionId = c.req.param('session_id')
+  const { message } = await c.req.json().catch(() => ({}))
+  const user = getUser(c);
 
-    if (!c.env.ANTHROPIC_API_KEY) {
-      return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 500);
-    }
+  if (!c.env.ANTHROPIC_API_KEY) {
+    return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 500);
+  }
 
-    const ownershipError = await ensureSessionOwnership(c, sessionId);
-    if (ownershipError) return ownershipError;
+  const ownershipError = await ensureSessionOwnership(c, sessionId);
+  if (ownershipError) return ownershipError;
 
-    // Prepare events array
-    const events: any[] = [];
-    if (message) {
-      events.push({
-        type: 'user.message' as const,
-        content: [
-          { type: 'text' as const, text: message }
-        ]
+  // Prepare events array
+  const events: any[] = [];
+  if (message) {
+    events.push({
+      type: 'user.message' as const,
+      content: [
+        { type: 'text' as const, text: message }
+      ]
+    });
+  }
+
+  const client = new Anthropic({
+    apiKey: c.env.ANTHROPIC_API_KEY,
+    defaultHeaders: { 'x-okta-user-id': user.id }
+  });
+
+  // Establish the stream first to avoid race conditions
+  const sessionStream = await client.beta.sessions.events.stream(sessionId);
+
+  return streamSSE(c, async (stream) => {
+    if (events.length > 0) {
+      // Send events asynchronously without awaiting so the stream can start processing them immediately.
+      // Use void to explicitly discard the returned Promise (fire-and-forget with handled rejection).
+      void client.beta.sessions.events.send(sessionId, { events }).catch((err: any) => {
+        console.error('Error sending events to stream:', err);
+        // Abort the session stream so the for-await loop below terminates instead of hanging.
+        sessionStream.controller.abort();
+        stream.writeSSE({
+          data: JSON.stringify({ error: err.message }),
+          event: 'error',
+        }).catch(() => {
+          // Ignore stream write errors if connection already closed
+        });
       });
     }
 
-    const client = new Anthropic({
-      apiKey: c.env.ANTHROPIC_API_KEY,
-      defaultHeaders: { 'x-okta-user-id': user.id }
-    });
-
-    // Establish the stream first to avoid race conditions
-    const sessionStream = await client.beta.sessions.events.stream(sessionId);
-
-    return streamSSE(c, async (stream) => {
-      await processSessionStream(stream, sessionStream, client, sessionId, events);
-    })
-  } catch (err: unknown) {
-    return c.json({ error: getErrorMessage(err) }, 500)
-  }
+    try {
+      for await (const event of sessionStream) {
+        await stream.writeSSE({
+          data: JSON.stringify(event),
+          event: 'message',
+          id: String(Date.now())
+        });
+      }
+    } catch (err: any) {
+      // If the stream was intentionally aborted (due to events.send failure above),
+      // skip writing a duplicate/misleading error event — the catch above already sent one.
+      if (!sessionStream.controller.signal.aborted) {
+        await stream.writeSSE({
+          data: JSON.stringify({ error: err.message }),
+          event: 'error',
+        });
+      }
+    }
+  })
 })
 
 app.get('/sessions/:session_id/events', async (c) => {
@@ -609,14 +620,10 @@ app.get('/sessions/:session_id/events', async (c) => {
 })
 
 app.post('/sessions/:session_id/events', async (c) => {
-  try {
-    const ownershipError = await ensureSessionOwnership(c, c.req.param('session_id'));
-    if (ownershipError) return ownershipError;
-    const body = await c.req.json().catch(() => ({}))
-    return fetchAnthropic(c, `/sessions/${c.req.param('session_id')}/events`, { method: 'POST', body: JSON.stringify(body) })
-  } catch (err: unknown) {
-    return c.json({ error: getErrorMessage(err) }, 500)
-  }
+  const ownershipError = await ensureSessionOwnership(c, c.req.param('session_id'));
+  if (ownershipError) return ownershipError;
+  const body = await c.req.json().catch(() => ({}))
+  return fetchAnthropic(c, `/sessions/${c.req.param('session_id')}/events`, { method: 'POST', body: JSON.stringify(body) })
 })
 
 app.get('/sessions/:session_id/events/stream', async (c) => {
@@ -679,14 +686,10 @@ app.get('/sessions/:session_id/events/stream', async (c) => {
 
 // ----- Session Resources Endpoints -----
 app.post('/sessions/:session_id/resources', async (c) => {
-  try {
-    const ownershipError = await ensureSessionOwnership(c, c.req.param('session_id'));
-    if (ownershipError) return ownershipError;
-    const body = await c.req.json().catch(() => ({}))
-    return fetchAnthropic(c, `/sessions/${c.req.param('session_id')}/resources`, { method: 'POST', body: JSON.stringify(body) })
-  } catch (err: unknown) {
-    return c.json({ error: getErrorMessage(err) }, 500)
-  }
+  const ownershipError = await ensureSessionOwnership(c, c.req.param('session_id'));
+  if (ownershipError) return ownershipError;
+  const body = await c.req.json().catch(() => ({}))
+  return fetchAnthropic(c, `/sessions/${c.req.param('session_id')}/resources`, { method: 'POST', body: JSON.stringify(body) })
 })
 
 app.get('/sessions/:session_id/resources', async (c) => {
@@ -702,14 +705,10 @@ app.get('/sessions/:session_id/resources/:resource_id', async (c) => {
 })
 
 app.post('/sessions/:session_id/resources/:resource_id', async (c) => {
-  try {
-    const ownershipError = await ensureSessionOwnership(c, c.req.param('session_id'));
-    if (ownershipError) return ownershipError;
-    const body = await c.req.json().catch(() => ({}))
-    return fetchAnthropic(c, `/sessions/${c.req.param('session_id')}/resources/${c.req.param('resource_id')}`, { method: 'POST', body: JSON.stringify(body) })
-  } catch (err: unknown) {
-    return c.json({ error: getErrorMessage(err) }, 500)
-  }
+  const ownershipError = await ensureSessionOwnership(c, c.req.param('session_id'));
+  if (ownershipError) return ownershipError;
+  const body = await c.req.json().catch(() => ({}))
+  return fetchAnthropic(c, `/sessions/${c.req.param('session_id')}/resources/${c.req.param('resource_id')}`, { method: 'POST', body: JSON.stringify(body) })
 })
 
 app.delete('/sessions/:session_id/resources/:resource_id', async (c) => {
@@ -720,18 +719,17 @@ app.delete('/sessions/:session_id/resources/:resource_id', async (c) => {
 
 // ----- Environments Endpoints -----
 app.post('/environments', async (c) => {
-  try {
-    if (!c.env.ANTHROPIC_API_KEY) {
-      return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 500);
-    }
-    const user = getUser(c);
-    const body = await c.req.json().catch(() => ({}))
+  if (!c.env.ANTHROPIC_API_KEY) {
+    return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 500);
+  }
+  const user = getUser(c);
+  const body = await c.req.json().catch(() => ({}))
 
-    const response = await fetchAnthropic(c, '/environments', { method: 'POST', body: JSON.stringify(body) });
+  const response = await fetchAnthropic(c, '/environments', { method: 'POST', body: JSON.stringify(body) });
 
-    if (!response.ok) {
-      return response;
-    }
+  if (!response.ok) {
+    return response;
+  }
 
     // Clone the response so we can read it and still return it.
     const data = await response.clone().json() as any;
@@ -749,44 +747,40 @@ app.post('/environments', async (c) => {
         console.error('Failed to store local environment ownership after creating environment', err);
         return c.json({ error: 'Failed to store local environment ownership after creating environment' }, 500);
       }
+      console.error('Failed to store local environment ownership after creating environment', err);
+      return c.json({ error: 'Failed to store local environment ownership after creating environment' }, 500);
     }
-
-    return response;
-  } catch (err: unknown) {
-    return c.json({ error: getErrorMessage(err) }, 500)
   }
+
+  return response;
 })
 
 app.get('/environments', async (c) => {
-  try {
-    if (!c.env.ANTHROPIC_API_KEY) {
-      return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 500);
-    }
-    const user = getUser(c);
-    const { results } = await c.env.DB.prepare('SELECT id FROM environments WHERE user_id = ?')
-      .bind(user.id)
-      .all<{ id: string }>();
-    const ownedEnvironmentIds = new Set(results.map((row: { id: string }) => row.id));
-    if (ownedEnvironmentIds.size === 0) {
-      return c.json({ data: [] });
-    }
-
-    const response = await fetchAnthropic(c, '/environments');
-
-    if (!response.ok) {
-      return response;
-    }
-
-    const data = await response.json() as any;
-    if (Array.isArray(data?.data)) {
-      data.data = data.data.filter((environment: { id?: string }) => environment.id && ownedEnvironmentIds.has(environment.id));
-    } else {
-      data.data = [];
-    }
-    return c.json(data);
-  } catch (err: unknown) {
-    return c.json({ error: getErrorMessage(err) }, 500)
+  if (!c.env.ANTHROPIC_API_KEY) {
+    return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 500);
   }
+  const user = getUser(c);
+  const { results } = await c.env.DB.prepare('SELECT id FROM environments WHERE user_id = ?')
+    .bind(user.id)
+    .all<{ id: string }>();
+  const ownedEnvironmentIds = new Set(results.map((row: { id: string }) => row.id));
+  if (ownedEnvironmentIds.size === 0) {
+    return c.json({ data: [] });
+  }
+
+  const response = await fetchAnthropic(c, '/environments');
+
+  if (!response.ok) {
+    return response;
+  }
+
+  const data = await response.json() as any;
+  if (Array.isArray(data?.data)) {
+    data.data = data.data.filter((environment: { id?: string }) => environment.id && ownedEnvironmentIds.has(environment.id));
+  } else {
+    data.data = [];
+  }
+  return c.json(data);
 })
 
 app.get('/environments/:environment_id', async (c) => {
@@ -796,14 +790,10 @@ app.get('/environments/:environment_id', async (c) => {
 })
 
 app.post('/environments/:environment_id', async (c) => {
-  try {
-    const ownershipError = await ensureEnvironmentOwnership(c, c.req.param('environment_id'));
-    if (ownershipError) return ownershipError;
-    const body = await c.req.json().catch(() => ({}))
-    return fetchAnthropic(c, `/environments/${c.req.param('environment_id')}`, { method: 'POST', body: JSON.stringify(body) })
-  } catch (err: unknown) {
-    return c.json({ error: getErrorMessage(err) }, 500)
-  }
+  const ownershipError = await ensureEnvironmentOwnership(c, c.req.param('environment_id'));
+  if (ownershipError) return ownershipError;
+  const body = await c.req.json().catch(() => ({}))
+  return fetchAnthropic(c, `/environments/${c.req.param('environment_id')}`, { method: 'POST', body: JSON.stringify(body) })
 })
 
 app.delete('/environments/:environment_id', async (c) => {
@@ -853,44 +843,37 @@ app.get('/mcp/tools/:provider', async (c) => {
     const provider = c.req.param('provider');
     const { results } = await c.env.DB.prepare('SELECT tool_name, type, permission FROM global_tool_permissions WHERE provider = ?').bind(provider).all();
 
-    // Group tools by type
-    const tools = results.reduce((acc: any, tool: any) => {
-      acc[tool.type] = acc[tool.type] || [];
-      acc[tool.type].push({ name: tool.tool_name, status: tool.permission.charAt(0).toUpperCase() + tool.permission.slice(1) });
-      return acc;
-    }, { read_only: [], write_delete: [] });
+  // Group tools by type
+  const tools = results.reduce((acc: any, tool: any) => {
+    acc[tool.type] = acc[tool.type] || [];
+    acc[tool.type].push({ name: tool.tool_name, status: tool.permission.charAt(0).toUpperCase() + tool.permission.slice(1) });
+    return acc;
+  }, { read_only: [], write_delete: [] });
 
-    return c.json(tools);
-  } catch (error: unknown) {
-    return c.json({ error: getErrorMessage(error) }, 500)
-  }
+  return c.json(tools);
 });
 
 app.post('/mcp/tools/:provider/:tool_name', async (c) => {
-  try {
-    const user = c.get('user');
-    if (!user.roles?.includes('admin')) {
-      return c.json({ error: 'Forbidden: Admin access required' }, 403);
-    }
-
-    const provider = c.req.param('provider');
-    const tool_name = decodeURIComponent(c.req.param('tool_name'));
-    const body = await c.req.json().catch(() => ({}));
-    const permission = body.permission?.toLowerCase();
-
-    // Simple validation
-    if (!permission || !['allow', 'ask', 'deny', 'auto'].includes(permission)) {
-      return c.json({ error: 'Invalid permission' }, 400);
-    }
-
-    await c.env.DB.prepare('UPDATE global_tool_permissions SET permission = ?, updated_at = CURRENT_TIMESTAMP WHERE provider = ? AND tool_name = ?')
-      .bind(permission, provider, tool_name)
-      .run();
-
-    return c.json({ success: true });
-  } catch (error: unknown) {
-    return c.json({ error: getErrorMessage(error) }, 500)
+  const user = c.get('user');
+  if (!user.roles?.includes('admin')) {
+    return c.json({ error: 'Forbidden: Admin access required' }, 403);
   }
+
+  const provider = c.req.param('provider');
+  const tool_name = decodeURIComponent(c.req.param('tool_name'));
+  const body = await c.req.json().catch(() => ({}));
+  const permission = body.permission?.toLowerCase();
+
+  // Simple validation
+  if (!permission || !['allow', 'ask', 'deny', 'auto'].includes(permission)) {
+    return c.json({ error: 'Invalid permission' }, 400);
+  }
+
+  await c.env.DB.prepare('UPDATE global_tool_permissions SET permission = ?, updated_at = CURRENT_TIMESTAMP WHERE provider = ? AND tool_name = ?')
+    .bind(permission, provider, tool_name)
+    .run();
+
+  return c.json({ success: true });
 });
 
 

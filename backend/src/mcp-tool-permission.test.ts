@@ -115,3 +115,98 @@ describe('POST /mcp/tools/:provider/:tool_name – admin authorization', () => {
     expect(body.error).toBe('Invalid permission');
   });
 });
+
+describe('GET /mcp/connections – admin authorization', () => {
+  beforeEach(() => {
+    vi.mocked(jwtVerify).mockReset();
+    mockDb.prepare.mockClear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const makeGetRequest = (token: string) =>
+    new Request('http://localhost/mcp/connections', {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+  it('returns 403 when the user has no roles', async () => {
+    vi.mocked(jwtVerify).mockResolvedValueOnce({
+      payload: { sub: 'user-abc' },
+    } as any);
+
+    const res = await app.fetch(makeGetRequest('token-no-roles'), baseEnv, {} as any);
+    expect(res.status).toBe(403);
+    expect((await res.json() as any).error).toBe('Forbidden: Admin access required');
+  });
+
+  it('returns 200 when the user has the admin role', async () => {
+    vi.mocked(jwtVerify).mockResolvedValueOnce({
+      payload: { sub: 'user-abc', groups: ['admin'] },
+    } as any);
+
+    // Mock DB response for GET /mcp/connections
+    mockDb.prepare.mockReturnValueOnce({
+      bind: vi.fn().mockReturnValue({
+        all: vi.fn().mockResolvedValue({ results: [{ provider: 'google_drive' }] }),
+      }),
+    } as any);
+
+    const res = await app.fetch(makeGetRequest('token-admin'), baseEnv, {} as any);
+    expect(res.status).toBe(200);
+    expect((await res.json() as any).connections).toEqual(['google_drive']);
+  });
+});
+
+describe('GET /mcp/tools/:provider – admin authorization', () => {
+  beforeEach(() => {
+    vi.mocked(jwtVerify).mockReset();
+    mockDb.prepare.mockClear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const makeGetRequest = (token: string) =>
+    new Request('http://localhost/mcp/tools/google_drive', {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+  it('returns 403 when the user has no roles', async () => {
+    vi.mocked(jwtVerify).mockResolvedValueOnce({
+      payload: { sub: 'user-abc' },
+    } as any);
+
+    const res = await app.fetch(makeGetRequest('token-no-roles'), baseEnv, {} as any);
+    expect(res.status).toBe(403);
+    expect((await res.json() as any).error).toBe('Forbidden: Admin access required');
+  });
+
+  it('returns 200 when the user has the admin role', async () => {
+    vi.mocked(jwtVerify).mockResolvedValueOnce({
+      payload: { sub: 'user-abc', groups: ['admin'] },
+    } as any);
+
+    // Mock DB response for GET /mcp/tools/:provider
+    mockDb.prepare.mockReturnValueOnce({
+      bind: vi.fn().mockReturnValue({
+        all: vi.fn().mockResolvedValue({
+          results: [
+            { tool_name: 'test_tool', type: 'read_only', permission: 'allow' }
+          ]
+        }),
+      }),
+    } as any);
+
+    const res = await app.fetch(makeGetRequest('token-admin'), baseEnv, {} as any);
+    expect(res.status).toBe(200);
+    expect((await res.json() as any)).toEqual({
+      read_only: [{ name: 'test_tool', status: 'Allow' }],
+      write_delete: []
+    });
+  });
+});

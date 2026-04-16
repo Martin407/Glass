@@ -1944,7 +1944,9 @@ export default {
           const payloadObj = JSON.parse(config.payload as string);
           if (payloadObj.message) msg += `
 Payload: ${payloadObj.message}`;
-        } catch (e) {}
+        } catch (e) {
+          console.error('Error parsing scheduled routine payload:', e);
+        }
       }
 
       const payload = {

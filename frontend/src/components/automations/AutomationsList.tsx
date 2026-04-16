@@ -1,5 +1,4 @@
-import { useState, useEffect } from 'react';
-import type { FormEvent } from 'react';
+import { useState, useEffect, type FormEvent } from 'react';
 import { Calendar, Loader2, Plus, Trash2, Edit2, Play, Pause } from 'lucide-react';
 import { agentsApi } from '../../lib/agentsApi';
 import type { ScheduleConfig, Agent } from '../../types';

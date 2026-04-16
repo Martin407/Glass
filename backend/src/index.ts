@@ -643,6 +643,39 @@ const parseJsonArray = (value: unknown): unknown[] | null => {
   return value;
 };
 
+const parseRangeParts = (value: string): [number, number] | null => {
+  const parts = value.split('-');
+  if (parts.length !== 2) return null;
+  const start = Number(parts[0]);
+  const end = Number(parts[1]);
+  if (!Number.isInteger(start) || !Number.isInteger(end)) return null;
+  return [start, end];
+};
+
+const isRangeMatch = (rangeValue: string, value: number): boolean => {
+  const range = parseRangeParts(rangeValue);
+  if (!range) return false;
+  const [start, end] = range;
+  return value >= start && value <= end;
+};
+
+const isStepMatch = (base: string, stepRaw: string, value: number, min: number, max: number): boolean => {
+  const step = Number(stepRaw);
+  if (!Number.isInteger(step) || step <= 0) return false;
+  if (base === '*') {
+    return (value - min) % step === 0;
+  }
+  if (base.includes('-')) {
+    const range = parseRangeParts(base);
+    if (!range) return false;
+    const [start, end] = range;
+    return value >= start && value <= end && (value - start) % step === 0;
+  }
+  const baseValue = Number(base);
+  if (!Number.isInteger(baseValue) || baseValue < min || baseValue > max) return false;
+  return value === baseValue;
+};
+
 const isCronFieldMatch = (field: string, value: number, min: number, max: number): boolean => {
   if (field === '*') return true;
   const segments = field.split(',');
@@ -650,33 +683,16 @@ const isCronFieldMatch = (field: string, value: number, min: number, max: number
     const segment = segmentRaw.trim();
     if (!segment) continue;
     if (segment.includes('/')) {
-      const [base, stepRaw] = segment.split('/');
-      const step = Number(stepRaw);
-      if (!Number.isInteger(step) || step <= 0) continue;
-      if (base === '*') {
-        if ((value - min) % step === 0) return true;
-        continue;
-      }
-      if (base.includes('-')) {
-        const [startRaw, endRaw] = base.split('-');
-        const start = Number(startRaw);
-        const end = Number(endRaw);
-        if (Number.isInteger(start) && Number.isInteger(end) && value >= start && value <= end && (value - start) % step === 0) {
-          return true;
-        }
-        continue;
-      }
-      const baseValue = Number(base);
-      if (Number.isInteger(baseValue) && baseValue >= min && baseValue <= max && value === baseValue) {
+      const stepParts = segment.split('/');
+      if (stepParts.length !== 2) continue;
+      const [base, stepRaw] = stepParts;
+      if (isStepMatch(base, stepRaw, value, min, max)) {
         return true;
       }
       continue;
     }
     if (segment.includes('-')) {
-      const [startRaw, endRaw] = segment.split('-');
-      const start = Number(startRaw);
-      const end = Number(endRaw);
-      if (Number.isInteger(start) && Number.isInteger(end) && value >= start && value <= end) return true;
+      if (isRangeMatch(segment, value)) return true;
       continue;
     }
     const exact = Number(segment);

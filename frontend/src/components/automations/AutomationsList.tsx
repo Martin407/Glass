@@ -73,10 +73,10 @@ export function AutomationsList({ agents }: AutomationsListProps) {
     setFormBusy(true);
     setFormError(null);
 
-    let payloadObj: unknown = null;
+    let payloadValue: unknown = null;
     if (payloadStr.trim()) {
       try {
-        payloadObj = JSON.parse(payloadStr);
+        payloadValue = JSON.parse(payloadStr);
       } catch {
         setFormError('Invalid JSON in payload');
         setFormBusy(false);
@@ -122,7 +122,7 @@ export function AutomationsList({ agents }: AutomationsListProps) {
         agent_id: agentId,
         trigger_type: triggerType,
         cron_expression: triggerType === 'schedule' ? cronExpression : '',
-        payload: payloadObj,
+        payload: payloadValue,
         github_repo: triggerType === 'github' ? githubRepo : null,
         github_events: triggerType === 'github' ? githubEventsValue : null,
         github_filters: triggerType === 'github' ? githubFiltersValue : null,

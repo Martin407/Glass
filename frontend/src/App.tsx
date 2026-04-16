@@ -28,7 +28,7 @@ import { GetStartedSection } from './components/GetStartedSection';
 import { CreateAgentDialog } from './components/dialogs/CreateAgentDialog';
 import { EditAgentDialog } from './components/dialogs/EditAgentDialog';
 import { CreateEnvironmentDialog } from './components/dialogs/CreateEnvironmentDialog';
-import { CreateSessionDialog } from './components/dialogs/CreateSessionDialog';
+import { CreateSessionDialog, type GithubRepo } from './components/dialogs/CreateSessionDialog';
 import { AddCredentialDialog } from './components/dialogs/AddCredentialDialog';
 import { SessionsList } from './components/sections/SessionsList';
 import { IntegrationsGrid } from './components/sections/IntegrationsGrid';
@@ -137,6 +137,7 @@ function App() {
   const [newSessionVaultId, setNewSessionVaultId] = useState('');
   const [newSessionAgentId, setNewSessionAgentId] = useState('');
   const [newSessionEnvironmentId, setNewSessionEnvironmentId] = useState('');
+  const [newSessionGithubRepos, setNewSessionGithubRepos] = useState<GithubRepo[]>([]);
   const [createSessionBusy, setCreateSessionBusy] = useState(false);
   const [createSessionError, setCreateSessionError] = useState<string | null>(null);
   const [sessionActionBusy, setSessionActionBusy] = useState<string | null>(null);
@@ -316,6 +317,7 @@ function App() {
     setNewSessionEnvironmentId(environments[0]?.id ?? '');
     setNewSessionTitle('');
     setNewSessionVaultId('');
+    setNewSessionGithubRepos([]);
     setCreateSessionError(null);
     setCreateSessionDialogOpen(true);
   };
@@ -331,6 +333,21 @@ function App() {
       };
       if (newSessionTitle.trim()) payload.title = newSessionTitle.trim();
       if (newSessionVaultId) payload.vault_id = newSessionVaultId;
+
+      const validRepos = newSessionGithubRepos.filter(r => r.url.trim());
+      if (validRepos.length > 0) {
+        payload.resources = validRepos.map(repo => {
+          const resPayload: Record<string, unknown> = {
+            type: 'github_repository',
+            url: repo.url.trim()
+          };
+          if (repo.token.trim()) {
+            resPayload.authorization_token = repo.token.trim();
+          }
+          return resPayload;
+        });
+      }
+
       const res = await agentsApi.createSession(payload);
       if (res.id) {
         setActiveSessions(prev => [...prev, { id: res.id, x: 100 + prev.length * 30, y: 100 + prev.length * 30 }]);
@@ -339,6 +356,7 @@ function App() {
       setCreateSessionDialogOpen(false);
       setNewSessionTitle('');
       setNewSessionVaultId('');
+      setNewSessionGithubRepos([]);
     } catch (err) {
       setCreateSessionError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -797,6 +815,7 @@ function App() {
         environmentId={newSessionEnvironmentId} setEnvironmentId={setNewSessionEnvironmentId}
         title={newSessionTitle} setTitle={setNewSessionTitle}
         vaultId={newSessionVaultId} setVaultId={setNewSessionVaultId}
+        githubRepos={newSessionGithubRepos} setGithubRepos={setNewSessionGithubRepos}
         busy={createSessionBusy} error={createSessionError}
         onSubmit={() => void handleCreateSession()}
       />

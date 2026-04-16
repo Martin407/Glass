@@ -1,5 +1,10 @@
-import { Loader2, MessageSquare, X } from 'lucide-react';
+import { Loader2, MessageSquare, Plus, Trash2, X } from 'lucide-react';
 import type { Agent, CredentialVault, Environment } from '../../types';
+
+export interface GithubRepo {
+  url: string;
+  token: string;
+}
 
 interface CreateSessionDialogProps {
   open: boolean;
@@ -15,6 +20,8 @@ interface CreateSessionDialogProps {
   setTitle: (v: string) => void;
   vaultId: string;
   setVaultId: (v: string) => void;
+  githubRepos: GithubRepo[];
+  setGithubRepos: (v: GithubRepo[] | ((prev: GithubRepo[]) => GithubRepo[])) => void;
   busy: boolean;
   error: string | null;
   onSubmit: () => void;
@@ -23,7 +30,7 @@ interface CreateSessionDialogProps {
 export function CreateSessionDialog({
   open, onClose, agents, environments, credentialVaults,
   agentId, setAgentId, environmentId, setEnvironmentId,
-  title, setTitle, vaultId, setVaultId, busy, error, onSubmit,
+  title, setTitle, vaultId, setVaultId, githubRepos, setGithubRepos, busy, error, onSubmit,
 }: CreateSessionDialogProps) {
   if (!open) return null;
   return (
@@ -86,6 +93,68 @@ export function CreateSessionDialog({
               </select>
             </div>
           )}
+
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-sm font-medium text-gray-700">GitHub Repositories <span className="text-gray-400 font-normal">(optional)</span></label>
+              <button
+                type="button"
+                onClick={() => setGithubRepos(prev => [...prev, { url: '', token: '' }])}
+                className="text-blue-500 hover:text-blue-600 text-xs font-medium flex items-center gap-1"
+              >
+                <Plus size={14} /> Add Repo
+              </button>
+            </div>
+            {githubRepos.length === 0 ? (
+              <p className="text-xs text-gray-500 italic">No repositories attached.</p>
+            ) : (
+              <div className="space-y-3">
+                {githubRepos.map((repo, i) => (
+                  <div key={i} className="flex flex-col gap-2 p-3 border border-gray-200 rounded-md bg-gray-50">
+                    <div className="flex gap-2">
+                      <div className="flex-1">
+                        <label className="block text-xs font-medium text-gray-500 mb-1">URL <span className="text-red-500">*</span></label>
+                        <input
+                          type="text"
+                          value={repo.url}
+                          onChange={e => setGithubRepos(prev => {
+                            const next = [...prev];
+                            next[i].url = e.target.value;
+                            return next;
+                          })}
+                          placeholder="https://github.com/owner/repo"
+                          className="w-full rounded-md border border-gray-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                      <div className="flex-1">
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Token</label>
+                        <input
+                          type="password"
+                          value={repo.token}
+                          onChange={e => setGithubRepos(prev => {
+                            const next = [...prev];
+                            next[i].token = e.target.value;
+                            return next;
+                          })}
+                          placeholder="ghp_..."
+                          className="w-full rounded-md border border-gray-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                      <div className="flex items-end mb-1">
+                        <button
+                          type="button"
+                          onClick={() => setGithubRepos(prev => prev.filter((_, idx) => idx !== i))}
+                          className="text-red-500 hover:text-red-600 p-1"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
         <div className="mt-5 flex justify-end gap-3">
           <button type="button" onClick={onClose} className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Cancel</button>

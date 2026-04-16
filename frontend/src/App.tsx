@@ -282,7 +282,11 @@ function App() {
           .then(() => setToolsVersion(v => v + 1))
           .catch(logApiError(`Failed to auto-refresh tools for ${selectedProvider}`));
       }
-    }).catch(logApiError('Failed to get MCP tools'));
+    }).catch((err: unknown) => {
+      setReadOnlyTools([]);
+      setWriteDeleteTools([]);
+      logApiError('Failed to get MCP tools')(err);
+    });
   }, [selectedProvider, toolsVersion]);
 
   // ── Session handlers ─────────────────────────────────────────────────────────
@@ -589,6 +593,8 @@ function App() {
   const handleAddConnection = () => {
     const name = newConnectionName.trim();
     if (!name) return;
+    const hasDuplicate = appState.some(app => app.name.toLocaleLowerCase() === name.toLocaleLowerCase());
+    if (hasDuplicate) return;
     setAppState(prev => [...prev, { name, icon: Zap, connected: false, color: 'text-gray-900' }]);
     setNewConnectionName('');
     setAddConnectionDialogOpen(false);

@@ -593,6 +593,209 @@ app.get('/', (c) => {
   return c.text('Multiplayer Managed Agents Platform API')
 })
 
+
+// ----- Schedule Configs Endpoints -----
+
+// ----- GitHub Webhook Endpoint -----
+app.post('/webhooks/github', async (c) => {
+  const eventName = c.req.header('x-github-event');
+  if (!eventName) {
+    return c.json({ error: 'Missing x-github-event header' }, 400);
+  }
+
+  const payload = await c.req.json().catch(() => ({}));
+  const repoFullName = payload.repository?.full_name;
+  if (!repoFullName) {
+    return c.json({ success: true, message: 'Ignored: no repository data' });
+  }
+
+  // Find all active github routines matching this repo and event
+  const configs = await c.env.DB.prepare('SELECT * FROM schedule_configs WHERE trigger_type = "github" AND is_active = 1 AND github_repo = ?')
+    .bind(repoFullName)
+    .all();
+
+  const matchingConfigs = configs.results.filter(cfg => {
+    try {
+      const events = JSON.parse(cfg.github_events as string || '[]');
+      // Simple match: if event name is in the list, or if the user specified action like 'pull_request.opened'
+      const action = payload.action;
+      const fullEvent = action ? `${eventName}.${action}` : eventName;
+
+      return events.includes(eventName) || events.includes(fullEvent);
+    } catch (e) {
+      return false;
+    }
+  });
+
+  for (const config of matchingConfigs) {
+    // Start session for matching routine
+    const sessionId = crypto.randomUUID();
+    let msg = `GitHub event triggered: ${eventName}`;
+    if (payload.action) msg += `.${payload.action}`;
+
+    if (config.payload) {
+      try {
+        const payloadObj = JSON.parse(config.payload as string);
+        if (payloadObj.message) msg += `
+Payload: ${payloadObj.message}`;
+      } catch (e) {}
+    }
+
+    const sessionPayload = {
+      id: sessionId,
+      agent: config.agent_id,
+      message: msg
+    };
+
+    // In a real app we'd probably use a queue, but we just trigger it directly here
+    const response = await fetchAnthropic(c, '/sessions', { method: 'POST', body: JSON.stringify(sessionPayload) });
+    if (response.ok) {
+      await c.env.DB.prepare('INSERT INTO sessions (id, user_id) VALUES (?, ?)')
+        .bind(sessionId, config.user_id)
+        .run();
+    }
+  }
+
+  return c.json({ success: true, triggered: matchingConfigs.length });
+});
+
+
+app.post('/v1/claude_code/routines/:api_token/fire', async (c) => {
+  const token = c.req.param('api_token');
+  const body = await c.req.json().catch(() => ({}));
+  const text = body.text || '';
+
+  const config = await c.env.DB.prepare('SELECT * FROM schedule_configs WHERE api_token = ? AND is_active = 1').bind(token).first();
+  if (!config) {
+    return c.json({ error: 'Invalid or inactive token' }, 401);
+  }
+
+  const sessionId = crypto.randomUUID();
+  let msg = 'API trigger fired.';
+  if (text) {
+    msg += ` Additional context: ${text}`;
+  }
+  if (config.payload) {
+    try {
+      const payloadObj = JSON.parse(config.payload as string);
+      if (payloadObj.message) msg += `
+Payload: ${payloadObj.message}`;
+    } catch (e) {}
+  }
+
+  const payload = {
+    id: sessionId,
+    agent: config.agent_id,
+    message: msg
+  };
+
+  const response = await fetchAnthropic(c, '/sessions', { method: 'POST', body: JSON.stringify(payload) });
+  if (!response.ok) return handleAnthropicError(c, response);
+
+  await c.env.DB.prepare('INSERT INTO sessions (id, user_id) VALUES (?, ?)')
+    .bind(sessionId, config.user_id)
+    .run();
+
+  return c.json({
+    type: 'routine_fire',
+    claude_code_session_id: sessionId,
+    claude_code_session_url: `https://claude.ai/code/${sessionId}`
+  });
+});
+
+
+app.get('/schedule-configs', async (c) => {
+  const user = getUser(c);
+  const result = await c.env.DB.prepare('SELECT * FROM schedule_configs WHERE user_id = ? ORDER BY created_at DESC')
+    .bind(user.id)
+    .all();
+  return c.json({ data: result.results });
+});
+
+app.post('/schedule-configs', async (c) => {
+  const user = getUser(c);
+  const body = await c.req.json().catch(() => ({}));
+  const id = crypto.randomUUID();
+  const agent_id = body.agent_id;
+  const is_active = body.is_active !== undefined ? (body.is_active ? 1 : 0) : 1;
+  const payload = body.payload ? JSON.stringify(body.payload) : null;
+  const trigger_type = body.trigger_type || 'schedule';
+
+  if (!agent_id) {
+    return c.json({ error: 'agent_id is required' }, 400);
+  }
+
+  const cron_expression = body.cron_expression || '';
+  const api_token = trigger_type === 'api' ? crypto.randomUUID() : null;
+  const github_repo = body.github_repo || null;
+  const github_events = body.github_events ? JSON.stringify(body.github_events) : null;
+  const github_filters = body.github_filters ? JSON.stringify(body.github_filters) : null;
+
+  await c.env.DB.prepare('INSERT INTO schedule_configs (id, user_id, agent_id, cron_expression, is_active, payload, trigger_type, api_token, github_repo, github_events, github_filters) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .bind(id, user.id, agent_id, cron_expression, is_active, payload, trigger_type, api_token, github_repo, github_events, github_filters)
+    .run();
+
+  return c.json({ id, user_id: user.id, agent_id, cron_expression, is_active, payload, trigger_type, api_token, github_repo, github_events, github_filters });
+});
+
+app.get('/schedule-configs/:id', async (c) => {
+  const user = getUser(c);
+  const id = c.req.param('id');
+  const result = await c.env.DB.prepare('SELECT * FROM schedule_configs WHERE id = ? AND user_id = ?')
+    .bind(id, user.id)
+    .first();
+  if (!result) {
+    return c.json({ error: 'Not found' }, 404);
+  }
+  return c.json(result);
+});
+
+app.post('/schedule-configs/:id', async (c) => {
+  const user = getUser(c);
+  const id = c.req.param('id');
+  const body = await c.req.json().catch(() => ({}));
+
+  const existing = await c.env.DB.prepare('SELECT * FROM schedule_configs WHERE id = ? AND user_id = ?')
+    .bind(id, user.id)
+    .first();
+
+  if (!existing) {
+    return c.json({ error: 'Not found' }, 404);
+  }
+
+  const agent_id = body.agent_id || existing.agent_id;
+  const cron_expression = body.cron_expression !== undefined ? body.cron_expression : existing.cron_expression;
+  const is_active = body.is_active !== undefined ? (body.is_active ? 1 : 0) : existing.is_active;
+  const payload = body.payload ? JSON.stringify(body.payload) : existing.payload;
+  const trigger_type = body.trigger_type || existing.trigger_type;
+
+  const github_repo = body.github_repo !== undefined ? body.github_repo : existing.github_repo;
+  const github_events = body.github_events ? JSON.stringify(body.github_events) : existing.github_events;
+  const github_filters = body.github_filters ? JSON.stringify(body.github_filters) : existing.github_filters;
+
+  await c.env.DB.prepare('UPDATE schedule_configs SET agent_id = ?, cron_expression = ?, is_active = ?, payload = ?, trigger_type = ?, github_repo = ?, github_events = ?, github_filters = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?')
+    .bind(agent_id, cron_expression, is_active, payload, trigger_type, github_repo, github_events, github_filters, id, user.id)
+    .run();
+
+  return c.json({ id, user_id: user.id, agent_id, cron_expression, is_active, payload, trigger_type, github_repo, github_events, github_filters });
+});
+
+app.delete('/schedule-configs/:id', async (c) => {
+  const user = getUser(c);
+  const id = c.req.param('id');
+
+  const result = await c.env.DB.prepare('DELETE FROM schedule_configs WHERE id = ? AND user_id = ?')
+    .bind(id, user.id)
+    .run();
+
+  if (result.meta.changes === 0) {
+    return c.json({ error: 'Not found' }, 404);
+  }
+
+  return c.json({ success: true });
+});
+
+
 // ----- Agents Endpoints -----
 app.post('/agents', async (c) => {
   if (!c.env.ANTHROPIC_API_KEY) {
@@ -1530,7 +1733,57 @@ export { RealtimeStateObject }
 
 export default {
   fetch: app.fetch,
-  async scheduled(event: ScheduledEvent, env: Bindings, ctx: ExecutionContext) {
-    console.log('Cron trigger executed at', event.cron)
+    async scheduled(event: ScheduledEvent, env: Bindings, ctx: ExecutionContext) {
+    console.log('Cron trigger executed at', event.cron);
+    // Find all scheduled routines that should run now
+    // We would need to implement full cron parsing here.
+    // For MVP, we'll just query all active scheduled routines and assume they run if their cron matches loosely
+    // Note: A full cron evaluator library would be needed for production
+
+    const db = env.DB;
+    const configs = await db.prepare('SELECT * FROM schedule_configs WHERE trigger_type = "schedule" AND is_active = 1').all();
+
+    for (const config of configs.results) {
+        // Trigger it!
+        const sessionId = crypto.randomUUID();
+        let msg = `Scheduled routine triggered at ${event.cron}`;
+
+        if (config.payload) {
+          try {
+            const payloadObj = JSON.parse(config.payload as string);
+            if (payloadObj.message) msg += `
+Payload: ${payloadObj.message}`;
+          } catch (e) {}
+        }
+
+        const payload = {
+          id: sessionId,
+          agent: config.agent_id,
+          message: msg
+        };
+
+        try {
+            const headers: Record<string, string> = {
+              'x-api-key': env.ANTHROPIC_API_KEY || '',
+              'Content-Type': 'application/json',
+              'anthropic-version': '2023-06-01',
+              'anthropic-beta': 'agents-2025-02-19'
+            };
+            const response = await fetch('https://api.anthropic.com/v1/sessions', {
+              method: 'POST',
+              headers,
+              body: JSON.stringify(payload)
+            });
+
+            if (response.ok) {
+               await db.prepare('INSERT INTO sessions (id, user_id) VALUES (?, ?)')
+                .bind(sessionId, config.user_id)
+                .run();
+               console.log(`Triggered session ${sessionId} for config ${config.id}`);
+            }
+        } catch (e) {
+            console.error('Error triggering scheduled routine:', e);
+        }
+    }
   }
 }

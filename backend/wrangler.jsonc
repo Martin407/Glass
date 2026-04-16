@@ -53,3 +53,5 @@
   //   "head_sampling_rate": 1
   // }
 }
+// Make sure migrations directoty is configured.
+// But it defaults to "migrations" so we might not need to set it explicitly if we use `wrangler d1 migrations`

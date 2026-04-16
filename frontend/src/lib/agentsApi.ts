@@ -146,7 +146,19 @@ export const agentsApi = {
   deleteSessionResource: (sessionId: string, resourceId: string) =>
     fetchApi(`/sessions/${sessionId}/resources/${resourceId}`, { method: 'DELETE' }),
 
-  // ── Environments ──────────────────────────────────────────────────────────────
+
+  // ── Schedule Configs ──────────────────────────────────────────────────────────
+  createScheduleConfig: (data: Record<string, unknown>) =>
+    fetchApi('/schedule-configs', { method: 'POST', body: JSON.stringify(data) }),
+  listScheduleConfigs: () =>
+    fetchApi('/schedule-configs'),
+  getScheduleConfig: (id: string) => fetchApi(`/schedule-configs/${id}`),
+  updateScheduleConfig: (id: string, data: Record<string, unknown>) =>
+    fetchApi(`/schedule-configs/${id}`, { method: 'POST', body: JSON.stringify(data) }),
+  deleteScheduleConfig: (id: string) =>
+    fetchApi(`/schedule-configs/${id}`, { method: 'DELETE' }),
+
+// ── Environments ──────────────────────────────────────────────────────────────
   createEnvironment: (data: Record<string, unknown>) =>
     fetchApi('/environments', { method: 'POST', body: JSON.stringify(data) }),
   listEnvironments: (params?: { include_archived?: boolean; limit?: number; page?: string }) => {

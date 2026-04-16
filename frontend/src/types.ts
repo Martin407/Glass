@@ -60,3 +60,19 @@ export interface AppProvider {
   connected: boolean;
   color: string;
 }
+
+export interface ScheduleConfig {
+  id: string;
+  agent_id: string;
+  cron_expression: string;
+  is_active: number;
+  payload?: string;
+
+  trigger_type?: 'schedule' | 'api' | 'github';
+  api_token?: string;
+  github_repo?: string;
+  github_events?: string[];
+  github_filters?: Record<string, string>;
+
+  created_at?: string;
+}

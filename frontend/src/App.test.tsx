@@ -1,4 +1,4 @@
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import App from './App';
 import { agentsApi } from './lib/agentsApi';
@@ -83,5 +83,56 @@ describe('App Component', () => {
         expect.objectContaining({ agent: 'agent-1', environment_id: 'env-1' }),
       );
     });
+  });
+
+  it('adds a new connection, supports keyboard submit, and rejects duplicate names', async () => {
+    const getMcpToolsMock = vi.mocked(agentsApi.getMcpTools).mockImplementation(async (provider: string) => {
+      if (provider === 'Slack') {
+        return {
+          read_only: [{ name: 'slack.read', status: 'allow' }],
+          write_delete: [],
+        };
+      }
+
+      if (provider === 'Acme') {
+        throw new Error('Unknown provider');
+      }
+
+      return { read_only: [], write_delete: [] };
+    });
+
+    render(<App />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Setup and API' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Connections' }));
+
+    await screen.findByText('slack.read');
+
+    fireEvent.click(screen.getByRole('button', { name: /Add connection/i }));
+    const input = screen.getByLabelText(/Connection Name/i);
+    const form = input.closest('form') as HTMLFormElement;
+    const addButton = within(form).getByRole('button', { name: 'Add connection' });
+
+    expect(addButton).toBeDisabled();
+
+    fireEvent.change(input, { target: { value: 'Acme' } });
+    expect(addButton).not.toBeDisabled();
+    fireEvent.submit(form);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Acme' })).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(screen.queryByText('slack.read')).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Add connection/i }));
+    const duplicateInput = screen.getByLabelText(/Connection Name/i);
+    const duplicateForm = duplicateInput.closest('form') as HTMLFormElement;
+    fireEvent.change(duplicateInput, { target: { value: 'acme' } });
+    fireEvent.click(within(duplicateForm).getByRole('button', { name: 'Add connection' }));
+
+    expect(screen.getAllByRole('button', { name: 'Acme' })).toHaveLength(1);
+    expect(getMcpToolsMock).toHaveBeenCalledWith('Acme');
   });
 });

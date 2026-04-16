@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { agentsApi } from './lib/agentsApi';
 import { ChatWindow } from './components/ChatWindow';
 import {
-  Search,
   Grid,
   MessageSquare,
   Zap,
@@ -11,11 +10,6 @@ import {
   MonitorPlay,
   FileText,
   Database,
-  BarChart,
-  Target,
-  Briefcase,
-  Layers,
-  Inbox,
   PenTool,
   ChevronDown,
   ChevronRight,
@@ -30,6 +24,7 @@ import { EditAgentDialog } from './components/dialogs/EditAgentDialog';
 import { CreateEnvironmentDialog } from './components/dialogs/CreateEnvironmentDialog';
 import { CreateSessionDialog } from './components/dialogs/CreateSessionDialog';
 import { AddCredentialDialog } from './components/dialogs/AddCredentialDialog';
+import { AddConnectionDialog } from './components/dialogs/AddConnectionDialog';
 import { SessionsList } from './components/sections/SessionsList';
 import { IntegrationsGrid } from './components/sections/IntegrationsGrid';
 import { ConnectionsDetail } from './components/sections/ConnectionsDetail';
@@ -45,18 +40,6 @@ const INITIAL_APPS: AppProvider[] = [
   { name: 'Notion', icon: FileText, connected: false, color: 'text-gray-900' },
   { name: 'Figma', icon: PenTool, connected: false, color: 'text-pink-500' },
   { name: 'Linear', icon: Zap, connected: false, color: 'text-indigo-500' },
-  { name: 'Datadog', icon: MonitorPlay, connected: false, color: 'text-purple-500' },
-  { name: 'Ramplify', icon: Target, connected: false, color: 'text-gray-900' },
-  { name: 'Snowflake', icon: Database, connected: false, color: 'text-blue-400' },
-  { name: 'Postgres', icon: Database, connected: false, color: 'text-blue-600' },
-  { name: 'Granola', icon: Layers, connected: false, color: 'text-green-500' },
-  { name: 'Salesforce', icon: Briefcase, connected: false, color: 'text-blue-500' },
-  { name: 'Gong', icon: BarChart, connected: false, color: 'text-purple-600' },
-  { name: 'Growth', icon: Zap, connected: false, color: 'text-gray-900' },
-  { name: 'Ramp Inspect', icon: Search, connected: false, color: 'text-green-600' },
-  { name: 'Servo', icon: Settings, connected: false, color: 'text-gray-900' },
-  { name: 'Hex', icon: Layers, connected: false, color: 'text-purple-600' },
-  { name: 'Google Workspace', icon: Inbox, connected: false, color: 'text-blue-500' },
 ];
 
 const logApiError = (context: string) => (err: unknown) => {
@@ -146,6 +129,8 @@ function App() {
   const [refreshToolsBusy, setRefreshToolsBusy] = useState(false);
   const [toolsVersion, setToolsVersion] = useState(0);
   const autoRefreshedProviders = useRef<Set<string>>(new Set());
+  const [addConnectionDialogOpen, setAddConnectionDialogOpen] = useState(false);
+  const [newConnectionName, setNewConnectionName] = useState('');
 
   // Credential vault
   const [credentialVaults, setCredentialVaults] = useState<CredentialVault[]>([]);
@@ -601,6 +586,15 @@ function App() {
     }
   };
 
+  const handleAddConnection = () => {
+    const name = newConnectionName.trim();
+    if (!name) return;
+    setAppState(prev => [...prev, { name, icon: Zap, connected: false, color: 'text-gray-900' }]);
+    setNewConnectionName('');
+    setAddConnectionDialogOpen(false);
+    setSelectedProvider(name);
+  };
+
   // ── Vault handlers ────────────────────────────────────────────────────────────
 
   const handleCreateVault = async () => {
@@ -812,6 +806,13 @@ function App() {
         busy={newCredentialBusy} error={newCredentialError}
         onSubmit={(vaultId) => void handleAddCredential(vaultId)}
       />
+      <AddConnectionDialog
+        open={addConnectionDialogOpen}
+        onClose={() => setAddConnectionDialogOpen(false)}
+        name={newConnectionName}
+        setName={setNewConnectionName}
+        onSubmit={handleAddConnection}
+      />
 
       {/* Primary rail navigation */}
       <div
@@ -870,6 +871,16 @@ function App() {
                     </button>
                   ))}
                 </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNewConnectionName('');
+                    setAddConnectionDialogOpen(true);
+                  }}
+                  className="mt-4 flex w-full items-center justify-center gap-2 rounded-md border border-dashed border-gray-300 py-2 text-sm text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                >
+                  <Plus size={16} /> Add connection
+                </button>
               </div>
             </div>
           ) : (

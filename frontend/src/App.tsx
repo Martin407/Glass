@@ -31,6 +31,7 @@ import { CreateEnvironmentDialog } from './components/dialogs/CreateEnvironmentD
 import { CreateSessionDialog } from './components/dialogs/CreateSessionDialog';
 import { AddCredentialDialog } from './components/dialogs/AddCredentialDialog';
 import { SessionsList } from './components/sections/SessionsList';
+import { AutomationsList } from './components/automations/AutomationsList';
 import { IntegrationsGrid } from './components/sections/IntegrationsGrid';
 import { ConnectionsDetail } from './components/sections/ConnectionsDetail';
 import { AgentsSettings } from './components/sections/AgentsSettings';
@@ -1097,7 +1098,7 @@ function App() {
         ) : activeRail === 'documents' ? (
           comingSoonContent('Documents')
         ) : activeRail === 'automations' ? (
-          comingSoonContent('Automations')
+          <AutomationsList agents={agents} />
         ) : activeRail === 'data' ? (
           comingSoonContent('Data Sources')
         ) : (

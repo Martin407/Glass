@@ -15,7 +15,7 @@ describe('Auth Middleware Config Leak Prevention', () => {
       // Intentionally omitting OKTA_DOMAIN and AUTH_BYPASS_FOR_DEV
     } as unknown as Bindings;
 
-    const req = new Request('http://localhost/api/test', {
+    const req = new Request('https://example.com/api/test', {
       method: 'GET',
     });
 
@@ -28,6 +28,22 @@ describe('Auth Middleware Config Leak Prevention', () => {
 
     // Check that the error details were actually logged to console.error
     expect(console.error).toHaveBeenCalledWith('Authentication is misconfigured: OKTA_DOMAIN is required');
+  });
+
+  it('should bypass auth on localhost when OKTA_DOMAIN is missing', async () => {
+    const env = {
+      // Intentionally omitting OKTA_DOMAIN and AUTH_BYPASS_FOR_DEV
+    } as unknown as Bindings;
+
+    const req = new Request('http://localhost/', {
+      method: 'GET',
+    });
+
+    const res = await app.fetch(req, env, {} as any);
+
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('Multiplayer Managed Agents Platform API');
+    expect(console.error).not.toHaveBeenCalledWith('Authentication is misconfigured: OKTA_DOMAIN is required');
   });
 
   it('should return a generic 500 without leaking config details when OKTA_ISSUER is invalid', async () => {

@@ -25,4 +25,5 @@ Authentication environment variables:
 - `OKTA_DOMAIN` (required in non-dev environments)
 - `OKTA_AUDIENCE` (recommended) or `OKTA_CLIENT_ID` (fallback)
 - `OKTA_ISSUER` (optional, defaults to `https://<OKTA_DOMAIN>/oauth2/default`)
-- `AUTH_BYPASS_FOR_DEV=true` only for local/dev bypass when Okta is unavailable
+- Localhost requests auto-bypass auth when `OKTA_DOMAIN` is unset (local dev mode)
+- `AUTH_BYPASS_FOR_DEV=true` to force bypass in any dev environment

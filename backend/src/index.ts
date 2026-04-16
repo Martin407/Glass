@@ -75,6 +75,236 @@ app.onError((err, c) => {
   return c.json({ error: getErrorMessage(err) }, 500)
 })
 
+// ----- MCP OAuth Helpers (PKCE + dynamic client registration) -----
+// Shared by all providers that use the RFC 7591 / RFC 8414 MCP OAuth flow.
+
+/**
+ * MCP OAuth discovery URLs per provider (RFC 8414 Authorization Server Metadata).
+ * Add new providers here as their MCP servers become available.
+ */
+const PROVIDER_MCP_DISCOVERY_URLS: Record<string, string> = {
+  Linear: 'https://mcp.linear.app/.well-known/oauth-authorization-server',
+  Slack: 'https://mcp.slack.com/.well-known/oauth-authorization-server',
+  Notion: 'https://mcp.notion.com/.well-known/oauth-authorization-server',
+  Figma: 'https://mcp.figma.com/.well-known/oauth-authorization-server',
+};
+
+/**
+ * MCP Streamable HTTP server endpoints for tool discovery.
+ * Derived from the same base domain as the discovery URLs.
+ */
+const PROVIDER_MCP_SERVER_URLS: Record<string, string> = {
+  Linear: 'https://mcp.linear.app/mcp',
+  Slack: 'https://mcp.slack.com/mcp',
+  Notion: 'https://mcp.notion.com/mcp',
+  Figma: 'https://mcp.figma.com/mcp',
+};
+
+interface McpToolFromServer {
+  name: string;
+  description?: string;
+  annotations?: {
+    readOnlyHint?: boolean;
+  };
+}
+
+/**
+ * Classify a tool as read_only or write_delete based on annotations and name heuristics.
+ */
+const classifyToolType = (tool: McpToolFromServer): 'read_only' | 'write_delete' => {
+  if (tool.annotations?.readOnlyHint === true) return 'read_only';
+  const readPattern = /\b(get|list|search|read|fetch|view|show|find|query|describe|check)\b/i;
+  if (readPattern.test(tool.name) || readPattern.test(tool.description ?? '')) return 'read_only';
+  return 'write_delete';
+};
+
+/**
+ * Calls the provider's MCP server to list available tools, then upserts them
+ * into global_tool_permissions (INSERT OR IGNORE to preserve existing permissions).
+ */
+export const fetchAndStoreMcpTools = async (
+  provider: string,
+  accessToken: string,
+  db: D1Database,
+): Promise<void> => {
+  const serverUrl = PROVIDER_MCP_SERVER_URLS[provider];
+  if (!serverUrl) return;
+
+  const response = await fetch(serverUrl, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json, text/event-stream',
+    },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`MCP tools/list returned ${response.status} for ${provider}`);
+  }
+
+  let tools: McpToolFromServer[] = [];
+  const contentType = response.headers.get('content-type') ?? '';
+
+  if (contentType.includes('text/event-stream')) {
+    // Streamable HTTP SSE response — scan lines for the result event
+    const text = await response.text();
+    for (const line of text.split('\n')) {
+      if (line.startsWith('data: ')) {
+        try {
+          const data = JSON.parse(line.slice(6)) as { result?: { tools?: McpToolFromServer[] } };
+          if (data?.result?.tools) {
+            tools = data.result.tools;
+            break;
+          }
+        } catch { /* skip malformed lines */ }
+      }
+    }
+  } else {
+    const data = await response.json() as { result?: { tools?: McpToolFromServer[] } };
+    tools = data?.result?.tools ?? [];
+  }
+
+  // Upsert: insert new tools with default 'auto' permission, leave existing rows untouched
+  for (const tool of tools) {
+    const type = classifyToolType(tool);
+    await db
+      .prepare(
+        `INSERT OR IGNORE INTO global_tool_permissions (provider, tool_name, type, permission)
+         VALUES (?, ?, ?, 'auto')`,
+      )
+      .bind(provider, tool.name, type)
+      .run();
+  }
+};
+
+const toBase64Url = (buffer: ArrayBuffer): string =>
+  btoa(String.fromCharCode(...new Uint8Array(buffer)))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+
+const generateCodeVerifier = (): string => {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return toBase64Url(bytes.buffer);
+};
+
+const generateCodeChallenge = async (verifier: string): Promise<string> => {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+  return toBase64Url(digest);
+};
+
+interface OAuthServerMetadata {
+  authorization_endpoint: string;
+  token_endpoint: string;
+  registration_endpoint?: string;
+}
+
+// ----- Generic OAuth Callback (PUBLIC — registered before auth middleware) -----
+app.get('/integrations/:provider/callback', async (c) => {
+  const provider = c.req.param('provider');
+  const defaultReturnTo = new URL('/', c.req.url).origin;
+  const code = c.req.query('code');
+  const stateId = c.req.query('state');
+  const oauthError = c.req.query('error');
+
+  if (oauthError) {
+    return c.redirect(`${defaultReturnTo}?oauth_error=${encodeURIComponent(oauthError)}&provider=${encodeURIComponent(provider)}`);
+  }
+  if (!code || !stateId) {
+    return c.redirect(`${defaultReturnTo}?oauth_error=missing_params&provider=${encodeURIComponent(provider)}`);
+  }
+
+  // Look up the in-flight state row (10-minute TTL enforced in SQL)
+  const state = await c.env.DB.prepare(`
+    SELECT user_id, provider, client_id, client_secret, code_verifier, token_endpoint, return_to
+    FROM oauth_state
+    WHERE id = ? AND created_at > datetime('now', '-10 minutes')
+  `).bind(stateId).first<{
+    user_id: string;
+    provider: string;
+    client_id: string;
+    client_secret: string | null;
+    code_verifier: string;
+    token_endpoint: string;
+    return_to: string;
+  }>();
+
+  if (!state) {
+    return c.redirect(`${defaultReturnTo}?oauth_error=invalid_state&provider=${encodeURIComponent(provider)}`);
+  }
+
+  // Consume the state row immediately to prevent replay
+  await c.env.DB.prepare('DELETE FROM oauth_state WHERE id = ?').bind(stateId).run();
+
+  const redirectUri = new URL(`/integrations/${provider}/callback`, c.req.url).toString();
+
+  const tokenBody = new URLSearchParams({
+    grant_type: 'authorization_code',
+    code,
+    redirect_uri: redirectUri,
+    client_id: state.client_id,
+    code_verifier: state.code_verifier,
+  });
+
+  const tokenHeaders: Record<string, string> = {
+    'Content-Type': 'application/x-www-form-urlencoded',
+  };
+  if (state.client_secret) {
+    tokenHeaders['Authorization'] = `Basic ${btoa(`${state.client_id}:${state.client_secret}`)}`;
+  }
+
+  try {
+    const tokenRes = await fetch(state.token_endpoint, {
+      method: 'POST',
+      headers: tokenHeaders,
+      body: tokenBody.toString(),
+    });
+
+    if (!tokenRes.ok) {
+      console.error(`${state.provider} token exchange failed:`, await tokenRes.text());
+      return c.redirect(`${state.return_to}?oauth_error=token_exchange_failed&provider=${encodeURIComponent(state.provider)}`);
+    }
+
+    const tokenData = await tokenRes.json() as {
+      access_token: string;
+      refresh_token?: string;
+      expires_in?: number;
+    };
+
+    const expiresAt = tokenData.expires_in
+      ? new Date(Date.now() + tokenData.expires_in * 1000).toISOString()
+      : null;
+
+    // Ensure the user row exists (FK requirement for oauth_tokens)
+    await c.env.DB.prepare('INSERT OR IGNORE INTO users (id, email) VALUES (?, ?)')
+      .bind(state.user_id, `${state.user_id}@oauth.local`)
+      .run();
+
+    // Upsert the token — one row per user per provider
+    const tokenId = crypto.randomUUID();
+    await c.env.DB.prepare(`
+      INSERT INTO oauth_tokens (id, user_id, provider, access_token, refresh_token, expires_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(user_id, provider) DO UPDATE SET
+        access_token = excluded.access_token,
+        refresh_token = excluded.refresh_token,
+        expires_at = excluded.expires_at,
+        updated_at = CURRENT_TIMESTAMP
+    `).bind(tokenId, state.user_id, state.provider, tokenData.access_token, tokenData.refresh_token ?? null, expiresAt).run();
+
+    // Discover and store available tools from the MCP server (best-effort, non-blocking)
+    fetchAndStoreMcpTools(state.provider, tokenData.access_token, c.env.DB).catch((err) => {
+      console.warn(`${state.provider} MCP tool discovery failed (non-fatal):`, err);
+    });
+
+    return c.redirect(`${state.return_to}?connected=${encodeURIComponent(state.provider)}`);
+  } catch (err) {
+    console.error(`${state.provider} OAuth callback error:`, err);
+    return c.redirect(`${state.return_to}?oauth_error=server_error&provider=${encodeURIComponent(state.provider)}`);
+  }
+});
+
 let jwks: ReturnType<typeof createRemoteJWKSet> | undefined;
 let jwksIssuer: string | undefined;
 const globalCache = new TTLMemoryCache();
@@ -120,6 +350,17 @@ export const getOktaAudience = (configuredAudience?: string, clientId?: string) 
   configuredAudience ?? clientId;
 
 const getUser = (c: AppContext): { id: string } => c.get('user');
+
+const LOCAL_DEV_HOSTNAMES = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1']);
+
+export const isLocalDevRequest = (url: string): boolean => {
+  try {
+    const hostname = new URL(url).hostname.toLowerCase();
+    return LOCAL_DEV_HOSTNAMES.has(hostname) || hostname.endsWith('.localhost');
+  } catch {
+    return false;
+  }
+};
 
 export const isConstraintError = (error: unknown): boolean => {
   const candidate = error as { code?: string | number; message?: string; cause?: unknown };
@@ -197,21 +438,6 @@ export const ensureSessionOwnership = async (c: AppContext, sessionId: string): 
   }
 
   if (!ownerId || ownerId !== user.id) {
-
-  let ownerUserId = sessionOwnershipCache.get(sessionId);
-
-  if (ownerUserId === undefined) {
-    const owner = await c.env.DB.prepare('SELECT user_id FROM sessions WHERE id = ?')
-      .bind(sessionId)
-      .first<{ user_id: string }>();
-
-    if (owner) {
-      ownerUserId = owner.user_id;
-      sessionOwnershipCache.set(sessionId, ownerUserId);
-    }
-  }
-
-  if (ownerUserId === undefined || ownerUserId !== user.id) {
     return c.json({ error: 'Session not found or unauthorized' }, 403);
   }
 };
@@ -260,11 +486,12 @@ export const archiveUpstreamResource = async (
 // Auth Middleware
 app.use('*', async (c, next) => {
   c.set('cache', globalCache);
+  if (c.env.AUTH_BYPASS_FOR_DEV === 'true' || (!c.env.OKTA_DOMAIN && isLocalDevRequest(c.req.url))) {
+    c.set('user', { id: 'user-123', roles: ['admin'] });
+    return await next();
+  }
+
   if (!c.env.OKTA_DOMAIN) {
-    if (c.env.AUTH_BYPASS_FOR_DEV === 'true') {
-      c.set('user', { id: 'user-123', roles: ['admin'] });
-      return await next();
-    }
     console.error('Authentication is misconfigured: OKTA_DOMAIN is required');
     return c.json({ error: 'Authentication is misconfigured' }, 500);
   }
@@ -383,19 +610,16 @@ app.post('/agents', async (c) => {
     return handleAnthropicError(c, response);
   }
 
-    const data: any = await response.json();
-    if (data.id) {
-      try {
-        await c.env.DB.prepare('INSERT INTO agents (id, user_id) VALUES (?, ?)')
-          .bind(data.id, user.id)
-          .run();
-      } catch (err: unknown) {
-        await archiveUpstreamResource(c, 'agents', data.id, 'Failed to persist local agent ownership after upstream create');
-        if (isConstraintError(err)) {
-          return c.json({ error: 'Agent already exists' }, 409);
-        }
-        console.error('Failed to store local agent ownership after creating agent', err);
-        return c.json({ error: 'Failed to store local agent ownership after creating agent' }, 500);
+  const data: any = await response.json();
+  if (data.id) {
+    try {
+      await c.env.DB.prepare('INSERT INTO agents (id, user_id) VALUES (?, ?)')
+        .bind(data.id, user.id)
+        .run();
+    } catch (err: unknown) {
+      await archiveUpstreamResource(c, 'agents', data.id, 'Failed to persist local agent ownership after upstream create');
+      if (isConstraintError(err)) {
+        return c.json({ error: 'Agent already exists' }, 409);
       }
       console.error('Failed to store local agent ownership after creating agent', err);
       return c.json({ error: 'Failed to store local agent ownership after creating agent' }, 500);
@@ -448,6 +672,30 @@ app.post('/agents/:agent_id', async (c) => {
   return fetchAnthropic(c, `/agents/${c.req.param('agent_id')}`, { method: 'POST', body: JSON.stringify(body) })
 })
 
+app.delete('/agents/:agent_id', async (c) => {
+  const agentId = c.req.param('agent_id');
+  const ownershipError = await ensureAgentOwnership(c, agentId);
+  if (ownershipError) return ownershipError;
+  if (!c.env.ANTHROPIC_API_KEY) {
+    return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 500);
+  }
+  const response = await fetch(`https://api.anthropic.com/v1/agents/${agentId}`, {
+    method: 'DELETE',
+    headers: getAnthropicHeaders(c),
+  });
+  if (!response.ok) {
+    return handleAnthropicError(c, response);
+  }
+  try {
+    await c.env.DB.prepare('DELETE FROM agents WHERE id = ?').bind(agentId).run();
+  } catch (err: unknown) {
+    console.error('Failed to delete local agent ownership after upstream deletion', err);
+  }
+  c.get('cache').delete(`agent_owner_${agentId}`);
+  const data = await response.json().catch(() => ({}));
+  return c.json(data);
+})
+
 app.post('/agents/:agent_id/archive', async (c) => {
   const ownershipError = await ensureAgentOwnership(c, c.req.param('agent_id'));
   if (ownershipError) return ownershipError;
@@ -460,24 +708,52 @@ app.get('/agents/:agent_id/versions', async (c) => {
   return fetchAnthropic(c, `/agents/${c.req.param('agent_id')}/versions`)
 })
 
+const resolveManagedAgentIdForSession = (body: Record<string, unknown>): string | undefined => {
+  if (typeof body.agent === 'string') return body.agent;
+  const agentObj = body.agent;
+  if (agentObj && typeof agentObj === 'object' && !Array.isArray(agentObj) && typeof (agentObj as { id?: unknown }).id === 'string') {
+    return (agentObj as { id: string }).id;
+  }
+  if (typeof body.agent_id === 'string') return body.agent_id;
+  return undefined;
+};
+
+/** Anthropic create-session expects `agent` (string or object), not `agent_id`. */
+const buildAnthropicSessionCreateBody = (body: Record<string, unknown>): Record<string, unknown> => {
+  const out = { ...body };
+  delete out.agent_id;
+  if (typeof body.agent_id === 'string' && body.agent === undefined) {
+    out.agent = body.agent_id;
+  }
+  return out;
+};
+
 // ----- Sessions Endpoints -----
 app.post('/sessions', async (c) => {
   if (!c.env.ANTHROPIC_API_KEY) {
     return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 500)
   }
   const user = getUser(c)
-  const body = await c.req.json().catch(() => ({}))
-  const agentId = typeof body?.agent_id === 'string' ? body.agent_id : undefined;
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>
+  const agentId = resolveManagedAgentIdForSession(body);
   if (!agentId) {
-    return c.json({ error: 'agent_id is required' }, 400);
+    return c.json({ error: 'agent is required (string agent id, or agent object with id)' }, 400);
   }
   const ownershipError = await ensureAgentOwnership(c, agentId);
   if (ownershipError) return ownershipError;
 
+  const environmentId = typeof body.environment_id === 'string' ? body.environment_id : undefined;
+  if (environmentId) {
+    const envOwnershipError = await ensureEnvironmentOwnership(c, environmentId);
+    if (envOwnershipError) return envOwnershipError;
+  }
+
+  const anthropicBody = buildAnthropicSessionCreateBody(body);
+
   // Create session in Anthropic
   const response = await fetch(`https://api.anthropic.com/v1/sessions`, {
     method: 'POST',
-    body: JSON.stringify(body),
+    body: JSON.stringify(anthropicBody),
     headers: getAnthropicHeaders(c)
   })
 
@@ -485,21 +761,18 @@ app.post('/sessions', async (c) => {
     return handleAnthropicError(c, response);
   }
 
-    const data: any = await response.json();
+  const data: any = await response.json();
 
-    // Store mapping in D1
-    if (data.id) {
-      try {
-        await c.env.DB.prepare('INSERT INTO sessions (id, user_id) VALUES (?, ?)')
-          .bind(data.id, user.id)
-          .run()
-      } catch (err: unknown) {
-        await archiveUpstreamResource(c, 'sessions', data.id, 'Failed to persist local session ownership after upstream create');
-        if (isConstraintError(err)) {
-          return c.json({ error: 'Failed to store session mapping due to a session ID conflict.' }, 409);
-        }
-        console.error('Failed to store local session ownership after creating session', err);
-        return c.json({ error: 'Failed to store local session ownership after creating session' }, 500);
+  // Store mapping in D1
+  if (data.id) {
+    try {
+      await c.env.DB.prepare('INSERT INTO sessions (id, user_id) VALUES (?, ?)')
+        .bind(data.id, user.id)
+        .run()
+    } catch (err: unknown) {
+      await archiveUpstreamResource(c, 'sessions', data.id, 'Failed to persist local session ownership after upstream create');
+      if (isConstraintError(err)) {
+        return c.json({ error: 'Failed to store session mapping due to a session ID conflict.' }, 409);
       }
       console.error('Failed to store local session ownership after creating session', err);
       return c.json({ error: 'Failed to store local session ownership after creating session' }, 500);
@@ -718,41 +991,51 @@ app.delete('/sessions/:session_id/resources/:resource_id', async (c) => {
 })
 
 // ----- Environments Endpoints -----
+
+const getAnthropicClient = (c: AppContext) => {
+  const user = c.get('user');
+  return new Anthropic({
+    apiKey: c.env.ANTHROPIC_API_KEY,
+    defaultHeaders: user?.id ? { 'x-okta-user-id': user.id } : undefined,
+  });
+};
+
+const handleSdkError = (c: AppContext, err: unknown) => {
+  const status = (err as any)?.status ?? 500;
+  const message = (err as any)?.message ?? 'Unknown error';
+  return c.json({ error: message }, status);
+};
+
 app.post('/environments', async (c) => {
   if (!c.env.ANTHROPIC_API_KEY) {
     return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 500);
   }
   const user = getUser(c);
-  const body = await c.req.json().catch(() => ({}))
+  const body = await c.req.json().catch(() => ({}));
 
-  const response = await fetchAnthropic(c, '/environments', { method: 'POST', body: JSON.stringify(body) });
-
-  if (!response.ok) {
-    return response;
+  let data: any;
+  try {
+    data = await getAnthropicClient(c).beta.environments.create(body);
+  } catch (err: unknown) {
+    return handleSdkError(c, err);
   }
 
-    // Clone the response so we can read it and still return it.
-    const data = await response.clone().json() as any;
-
-    if (data.id) {
-      try {
-        await c.env.DB.prepare('INSERT INTO environments (id, user_id) VALUES (?, ?)')
-          .bind(data.id, user.id)
-          .run();
-      } catch (err: unknown) {
-        await archiveUpstreamResource(c, 'environments', data.id, 'Failed to persist local environment ownership after upstream create');
-        if (isConstraintError(err)) {
-          return c.json({ error: 'Environment already exists' }, 409);
-        }
-        console.error('Failed to store local environment ownership after creating environment', err);
-        return c.json({ error: 'Failed to store local environment ownership after creating environment' }, 500);
+  if (data.id) {
+    try {
+      await c.env.DB.prepare('INSERT INTO environments (id, user_id) VALUES (?, ?)')
+        .bind(data.id, user.id)
+        .run();
+    } catch (err: unknown) {
+      await archiveUpstreamResource(c, 'environments', data.id, 'Failed to persist local environment ownership after upstream create');
+      if (isConstraintError(err)) {
+        return c.json({ error: 'Environment already exists' }, 409);
       }
       console.error('Failed to store local environment ownership after creating environment', err);
       return c.json({ error: 'Failed to store local environment ownership after creating environment' }, 500);
     }
   }
 
-  return response;
+  return c.json(data);
 })
 
 app.get('/environments', async (c) => {
@@ -768,65 +1051,321 @@ app.get('/environments', async (c) => {
     return c.json({ data: [] });
   }
 
-  const response = await fetchAnthropic(c, '/environments');
-
-  if (!response.ok) {
-    return response;
+  let response: any;
+  try {
+    response = await getAnthropicClient(c).beta.environments.list();
+  } catch (err: unknown) {
+    return handleSdkError(c, err);
   }
 
-  const data = await response.json() as any;
-  if (Array.isArray(data?.data)) {
-    data.data = data.data.filter((environment: { id?: string }) => environment.id && ownedEnvironmentIds.has(environment.id));
-  } else {
-    data.data = [];
-  }
-  return c.json(data);
+  const allEnvironments: { id?: string }[] = Array.isArray(response?.data) ? response.data : [];
+  return c.json({ data: allEnvironments.filter((env) => env.id && ownedEnvironmentIds.has(env.id)) });
 })
 
 app.get('/environments/:environment_id', async (c) => {
   const ownershipError = await ensureEnvironmentOwnership(c, c.req.param('environment_id'));
   if (ownershipError) return ownershipError;
-  return fetchAnthropic(c, `/environments/${c.req.param('environment_id')}`)
+  try {
+    const data = await getAnthropicClient(c).beta.environments.retrieve(c.req.param('environment_id'));
+    return c.json(data);
+  } catch (err: unknown) {
+    return handleSdkError(c, err);
+  }
 })
 
 app.post('/environments/:environment_id', async (c) => {
   const ownershipError = await ensureEnvironmentOwnership(c, c.req.param('environment_id'));
   if (ownershipError) return ownershipError;
-  const body = await c.req.json().catch(() => ({}))
-  return fetchAnthropic(c, `/environments/${c.req.param('environment_id')}`, { method: 'POST', body: JSON.stringify(body) })
+  const body = await c.req.json().catch(() => ({}));
+  try {
+    const data = await getAnthropicClient(c).beta.environments.update(c.req.param('environment_id'), body);
+    return c.json(data);
+  } catch (err: unknown) {
+    return handleSdkError(c, err);
+  }
 })
 
 app.delete('/environments/:environment_id', async (c) => {
   const ownershipError = await ensureEnvironmentOwnership(c, c.req.param('environment_id'));
   if (ownershipError) return ownershipError;
   const environmentId = c.req.param('environment_id');
-  const response = await fetchAnthropic(c, `/environments/${environmentId}`, { method: 'DELETE' });
-  if (response.ok) {
+  try {
+    const data = await getAnthropicClient(c).beta.environments.delete(environmentId);
     try {
       await c.env.DB.prepare('DELETE FROM environments WHERE id = ?').bind(environmentId).run();
     } catch (err: unknown) {
       console.error('Failed to delete local environment ownership after upstream deletion', err);
     }
     c.get('cache').delete(`env_owner_${environmentId}`);
+    return c.json(data);
+  } catch (err: unknown) {
+    return handleSdkError(c, err);
   }
-  return response;
 })
 
 app.post('/environments/:environment_id/archive', async (c) => {
   const ownershipError = await ensureEnvironmentOwnership(c, c.req.param('environment_id'));
   if (ownershipError) return ownershipError;
-  return fetchAnthropic(c, `/environments/${c.req.param('environment_id')}/archive`, { method: 'POST' })
+  try {
+    const data = await getAnthropicClient(c).beta.environments.archive(c.req.param('environment_id'));
+    return c.json(data);
+  } catch (err: unknown) {
+    return handleSdkError(c, err);
+  }
 })
 
 
+
+// ----- Credential Vault Endpoints -----
+
+const ensureVaultOwnership = async (c: AppContext, vaultId: string): Promise<Response | undefined> => {
+  const user = getUser(c);
+  const vault = await c.env.DB.prepare(
+    'SELECT id FROM credential_vaults WHERE id = ? AND user_id = ?',
+  ).bind(vaultId, user.id).first();
+  if (!vault) {
+    return c.json({ error: 'Vault not found or unauthorized' }, 403);
+  }
+};
+
+/**
+ * GET /credential-vaults — return the user's local vault record(s).
+ * We store one vault per user in D1; the Anthropic vault ID is the primary key.
+ */
+app.get('/credential-vaults', async (c) => {
+  const user = getUser(c);
+  const { results } = await c.env.DB.prepare(
+    'SELECT id, created_at FROM credential_vaults WHERE user_id = ?',
+  ).bind(user.id).all<{ id: string; created_at: string }>();
+  return c.json({ data: results });
+});
+
+/**
+ * POST /credential-vaults — create a new credential vault on Anthropic and record it locally.
+ */
+app.post('/credential-vaults', async (c) => {
+  if (!c.env.ANTHROPIC_API_KEY) {
+    return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 500);
+  }
+  const user = getUser(c);
+  const body = await c.req.json().catch(() => ({}));
+
+  const response = await fetch('https://api.anthropic.com/v1/credential_vaults', {
+    method: 'POST',
+    headers: getAnthropicHeaders(c),
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) return handleAnthropicError(c, response);
+
+  const data = await response.json() as { id?: string };
+  if (data.id) {
+    await c.env.DB.prepare('INSERT OR REPLACE INTO credential_vaults (id, user_id) VALUES (?, ?)')
+      .bind(data.id, user.id).run();
+  }
+  return c.json(data);
+});
+
+/**
+ * DELETE /credential-vaults/:vault_id — archive vault on Anthropic and remove local record.
+ */
+app.delete('/credential-vaults/:vault_id', async (c) => {
+  if (!c.env.ANTHROPIC_API_KEY) {
+    return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 500);
+  }
+  const vaultId = c.req.param('vault_id');
+  const user = getUser(c);
+
+  const vault = await c.env.DB.prepare(
+    'SELECT id FROM credential_vaults WHERE id = ? AND user_id = ?',
+  ).bind(vaultId, user.id).first();
+  if (!vault) return c.json({ error: 'Vault not found or unauthorized' }, 404);
+
+  const response = await fetch(`https://api.anthropic.com/v1/credential_vaults/${vaultId}`, {
+    method: 'DELETE',
+    headers: getAnthropicHeaders(c),
+  });
+
+  await c.env.DB.prepare('DELETE FROM credential_vaults WHERE id = ?').bind(vaultId).run();
+
+  if (!response.ok) return handleAnthropicError(c, response);
+  const data = await response.json().catch(() => ({}));
+  return c.json(data);
+});
+
+/**
+ * GET /credential-vaults/:vault_id — retrieve a single vault.
+ */
+app.get('/credential-vaults/:vault_id', async (c) => {
+  if (!c.env.ANTHROPIC_API_KEY) {
+    return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 500);
+  }
+  const vaultId = c.req.param('vault_id');
+  const ownershipError = await ensureVaultOwnership(c, vaultId);
+  if (ownershipError) return ownershipError;
+  try {
+    const data = await getAnthropicClient(c).beta.vaults.retrieve(vaultId);
+    return c.json(data);
+  } catch (err: unknown) {
+    return handleSdkError(c, err);
+  }
+});
+
+/**
+ * POST /credential-vaults/:vault_id — update a vault.
+ */
+app.post('/credential-vaults/:vault_id', async (c) => {
+  if (!c.env.ANTHROPIC_API_KEY) {
+    return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 500);
+  }
+  const vaultId = c.req.param('vault_id');
+  const ownershipError = await ensureVaultOwnership(c, vaultId);
+  if (ownershipError) return ownershipError;
+  const body = await c.req.json().catch(() => ({}));
+  try {
+    const data = await getAnthropicClient(c).beta.vaults.update(vaultId, body);
+    return c.json(data);
+  } catch (err: unknown) {
+    return handleSdkError(c, err);
+  }
+});
+
+/**
+ * POST /credential-vaults/:vault_id/archive — archive a vault.
+ */
+app.post('/credential-vaults/:vault_id/archive', async (c) => {
+  if (!c.env.ANTHROPIC_API_KEY) {
+    return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 500);
+  }
+  const vaultId = c.req.param('vault_id');
+  const ownershipError = await ensureVaultOwnership(c, vaultId);
+  if (ownershipError) return ownershipError;
+  try {
+    const data = await getAnthropicClient(c).beta.vaults.archive(vaultId);
+    return c.json(data);
+  } catch (err: unknown) {
+    return handleSdkError(c, err);
+  }
+});
+
+/**
+ * GET /credential-vaults/:vault_id/credentials — list credentials in a vault.
+ */
+app.get('/credential-vaults/:vault_id/credentials', async (c) => {
+  if (!c.env.ANTHROPIC_API_KEY) {
+    return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 500);
+  }
+  const vaultId = c.req.param('vault_id');
+  const ownershipError = await ensureVaultOwnership(c, vaultId);
+  if (ownershipError) return ownershipError;
+  try {
+    const data = await getAnthropicClient(c).beta.vaults.credentials.list(vaultId);
+    return c.json(data);
+  } catch (err: unknown) {
+    return handleSdkError(c, err);
+  }
+});
+
+/**
+ * POST /credential-vaults/:vault_id/credentials — add an MCP OAuth credential to the vault.
+ */
+app.post('/credential-vaults/:vault_id/credentials', async (c) => {
+  if (!c.env.ANTHROPIC_API_KEY) {
+    return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 500);
+  }
+  const vaultId = c.req.param('vault_id');
+  const ownershipError = await ensureVaultOwnership(c, vaultId);
+  if (ownershipError) return ownershipError;
+  const body = await c.req.json().catch(() => ({}));
+  try {
+    const data = await getAnthropicClient(c).beta.vaults.credentials.create(vaultId, body);
+    return c.json(data);
+  } catch (err: unknown) {
+    return handleSdkError(c, err);
+  }
+});
+
+/**
+ * GET /credential-vaults/:vault_id/credentials/:credential_id — retrieve a single credential.
+ */
+app.get('/credential-vaults/:vault_id/credentials/:credential_id', async (c) => {
+  if (!c.env.ANTHROPIC_API_KEY) {
+    return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 500);
+  }
+  const vaultId = c.req.param('vault_id');
+  const credentialId = c.req.param('credential_id');
+  const ownershipError = await ensureVaultOwnership(c, vaultId);
+  if (ownershipError) return ownershipError;
+  try {
+    const data = await getAnthropicClient(c).beta.vaults.credentials.retrieve(credentialId, { vault_id: vaultId });
+    return c.json(data);
+  } catch (err: unknown) {
+    return handleSdkError(c, err);
+  }
+});
+
+/**
+ * POST /credential-vaults/:vault_id/credentials/:credential_id — update a credential.
+ */
+app.post('/credential-vaults/:vault_id/credentials/:credential_id', async (c) => {
+  if (!c.env.ANTHROPIC_API_KEY) {
+    return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 500);
+  }
+  const vaultId = c.req.param('vault_id');
+  const credentialId = c.req.param('credential_id');
+  const ownershipError = await ensureVaultOwnership(c, vaultId);
+  if (ownershipError) return ownershipError;
+  const body = await c.req.json().catch(() => ({}));
+  try {
+    const data = await getAnthropicClient(c).beta.vaults.credentials.update(credentialId, { vault_id: vaultId, ...body });
+    return c.json(data);
+  } catch (err: unknown) {
+    return handleSdkError(c, err);
+  }
+});
+
+/**
+ * DELETE /credential-vaults/:vault_id/credentials/:credential_id — delete a credential.
+ */
+app.delete('/credential-vaults/:vault_id/credentials/:credential_id', async (c) => {
+  if (!c.env.ANTHROPIC_API_KEY) {
+    return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 500);
+  }
+  const vaultId = c.req.param('vault_id');
+  const credentialId = c.req.param('credential_id');
+  const ownershipError = await ensureVaultOwnership(c, vaultId);
+  if (ownershipError) return ownershipError;
+  try {
+    const data = await getAnthropicClient(c).beta.vaults.credentials.delete(credentialId, { vault_id: vaultId });
+    return c.json(data);
+  } catch (err: unknown) {
+    return handleSdkError(c, err);
+  }
+});
+
+/**
+ * POST /credential-vaults/:vault_id/credentials/:credential_id/archive — archive a credential.
+ */
+app.post('/credential-vaults/:vault_id/credentials/:credential_id/archive', async (c) => {
+  if (!c.env.ANTHROPIC_API_KEY) {
+    return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 500);
+  }
+  const vaultId = c.req.param('vault_id');
+  const credentialId = c.req.param('credential_id');
+  const ownershipError = await ensureVaultOwnership(c, vaultId);
+  if (ownershipError) return ownershipError;
+  try {
+    const data = await getAnthropicClient(c).beta.vaults.credentials.archive(credentialId, { vault_id: vaultId });
+    return c.json(data);
+  } catch (err: unknown) {
+    return handleSdkError(c, err);
+  }
+});
 
 // ----- MCP Connections & Tools Endpoints -----
 app.get('/mcp/connections', async (c) => {
   try {
     const user = c.get('user');
-    if (!user.roles?.includes('admin')) {
-      return c.json({ error: 'Forbidden: Admin access required' }, 403);
-    }
     const { results } = await c.env.DB.prepare('SELECT DISTINCT provider FROM oauth_tokens WHERE user_id = ?').bind(user.id).all();
     return c.json({ connections: results.map(r => r.provider) });
   } catch (error: unknown) {
@@ -851,6 +1390,116 @@ app.get('/mcp/tools/:provider', async (c) => {
   }, { read_only: [], write_delete: [] });
 
   return c.json(tools);
+  } catch (error: unknown) {
+    return c.json({ error: getErrorMessage(error) }, 500)
+  }
+});
+
+app.post('/mcp/:provider/tools/refresh', async (c) => {
+  try {
+    const user = c.get('user');
+    if (!user.roles?.includes('admin')) {
+      return c.json({ error: 'Forbidden: Admin access required' }, 403);
+    }
+    const provider = c.req.param('provider');
+
+    // Use any stored token for this provider to discover tools
+    const tokenRow = await c.env.DB.prepare(
+      'SELECT access_token FROM oauth_tokens WHERE provider = ? LIMIT 1',
+    ).bind(provider).first<{ access_token: string }>();
+
+    if (!tokenRow) {
+      return c.json({ error: `No connection found for ${provider}` }, 404);
+    }
+
+    await fetchAndStoreMcpTools(provider, tokenRow.access_token, c.env.DB);
+    return c.json({ success: true });
+  } catch (error: unknown) {
+    return c.json({ error: getErrorMessage(error) }, 502);
+  }
+});
+
+// ----- Generic OAuth Authorize & Disconnect (authenticated) -----
+app.get('/integrations/:provider/authorize', async (c) => {
+  const provider = c.req.param('provider');
+  const user = getUser(c);
+  const returnTo = c.req.query('return_to') ?? new URL('/', c.req.url).origin;
+  const redirectUri = new URL(`/integrations/${provider}/callback`, c.req.url).toString();
+
+  const discoveryUrl = PROVIDER_MCP_DISCOVERY_URLS[provider];
+  if (!discoveryUrl) {
+    return c.json({ error: `Provider '${provider}' is not configured for MCP OAuth` }, 404);
+  }
+
+  // 1. Discover MCP OAuth metadata
+  let metadata: OAuthServerMetadata;
+  try {
+    const metaRes = await fetch(discoveryUrl, { headers: { Accept: 'application/json' } });
+    if (!metaRes.ok) throw new Error(`HTTP ${metaRes.status}`);
+    metadata = await metaRes.json() as OAuthServerMetadata;
+  } catch (err) {
+    console.error(`${provider} MCP metadata discovery failed:`, err);
+    return c.json({ error: `Failed to discover ${provider} MCP OAuth endpoints` }, 502);
+  }
+
+  if (!metadata.registration_endpoint) {
+    return c.json({ error: `${provider} MCP server does not advertise a registration endpoint` }, 501);
+  }
+
+  // 2. Dynamically register Glass as an OAuth client for this redirect URI (RFC 7591)
+  let clientId: string;
+  let clientSecret: string | undefined;
+  try {
+    const regRes = await fetch(metadata.registration_endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        client_name: 'Glass',
+        redirect_uris: [redirectUri],
+        grant_types: ['authorization_code'],
+        response_types: ['code'],
+        token_endpoint_auth_method: 'none',
+      }),
+    });
+    if (!regRes.ok) throw new Error(await regRes.text());
+    const reg = await regRes.json() as { client_id: string; client_secret?: string };
+    clientId = reg.client_id;
+    clientSecret = reg.client_secret;
+  } catch (err) {
+    console.error(`${provider} dynamic client registration failed:`, err);
+    return c.json({ error: `Failed to register with ${provider} MCP server` }, 502);
+  }
+
+  // 3. Generate PKCE pair
+  const codeVerifier = generateCodeVerifier();
+  const codeChallenge = await generateCodeChallenge(codeVerifier);
+
+  // 4. Persist in-flight state to D1 (10-minute window enforced on read)
+  const stateId = crypto.randomUUID();
+  await c.env.DB.prepare(`
+    INSERT INTO oauth_state (id, user_id, provider, client_id, client_secret, code_verifier, token_endpoint, return_to)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(stateId, user.id, provider, clientId, clientSecret ?? null, codeVerifier, metadata.token_endpoint, returnTo).run();
+
+  // 5. Build and return the authorization URL
+  const authUrl = new URL(metadata.authorization_endpoint);
+  authUrl.searchParams.set('client_id', clientId);
+  authUrl.searchParams.set('redirect_uri', redirectUri);
+  authUrl.searchParams.set('response_type', 'code');
+  authUrl.searchParams.set('code_challenge', codeChallenge);
+  authUrl.searchParams.set('code_challenge_method', 'S256');
+  authUrl.searchParams.set('state', stateId);
+
+  return c.json({ url: authUrl.toString() });
+});
+
+app.delete('/integrations/:provider/disconnect', async (c) => {
+  const provider = c.req.param('provider');
+  const user = getUser(c);
+  await c.env.DB.prepare('DELETE FROM oauth_tokens WHERE user_id = ? AND provider = ?')
+    .bind(user.id, provider)
+    .run();
+  return c.json({ success: true });
 });
 
 app.post('/mcp/tools/:provider/:tool_name', async (c) => {

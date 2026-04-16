@@ -10,7 +10,9 @@ export const processSessionStream = async (
   sessionId: string,
   events: unknown[]
 ) => {
-  const typedStream = sessionStream as { [Symbol.asyncIterator](): AsyncIterator<unknown>; controller: { abort(): void; signal: AbortSignal } };
+  const typedStream = sessionStream as AsyncIterable<unknown> & {
+    controller: { abort(): void; signal: AbortSignal };
+  };
 
   if (events.length > 0) {
     // Send events asynchronously without awaiting so the stream can start processing them immediately.
@@ -29,7 +31,7 @@ export const processSessionStream = async (
   }
 
   try {
-    for await (const event of sessionStream) {
+    for await (const event of typedStream) {
       await stream.writeSSE({
         data: JSON.stringify(event),
         event: 'message',

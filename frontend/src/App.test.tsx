@@ -7,6 +7,9 @@ import { agentsApi } from './lib/agentsApi';
 vi.mock('./lib/agentsApi', () => ({
   agentsApi: {
     listAgents: vi.fn().mockResolvedValue({ data: [] }),
+    listEnvironments: vi.fn().mockResolvedValue({ data: [] }),
+    listSessions: vi.fn().mockResolvedValue({ data: [] }),
+    listCredentialVaults: vi.fn().mockResolvedValue({ data: [] }),
     getMcpConnections: vi.fn().mockResolvedValue({ connections: [] }),
     getMcpTools: vi.fn().mockResolvedValue({ read_only: [], write_delete: [] }),
     createSession: vi.fn(),
@@ -28,54 +31,57 @@ describe('App Component', () => {
     vi.unstubAllGlobals();
   });
 
-  it('renders the App component with Slack provider selected by default', async () => {
+  it('renders the App component and shows the messages view by default', async () => {
     render(<App />);
 
-    // Check for the new session button
-    expect(screen.getByText('New Session')).toBeInTheDocument();
+    // There are two "New Session" buttons (header + content area)
+    const newSessionButtons = screen.getAllByText('New Session');
+    expect(newSessionButtons.length).toBeGreaterThan(0);
 
     // Wait for async effects to resolve (e.g. agentsApi calls)
     await waitFor(() => {
-      // Look for the Slack title in the main area (it's inside an h1)
-      const heading = screen.getByRole('heading', { name: 'Slack' });
+      // The default rail is 'messages', so "Recent Sessions" heading should be visible
+      const heading = screen.getByRole('heading', { name: 'Recent Sessions' });
       expect(heading).toBeInTheDocument();
     });
 
-    // Also check for standard tool sections
-    expect(screen.getByText(/READ-ONLY TOOLS/i)).toBeInTheDocument();
-    expect(screen.getByText(/WRITE\/DELETE TOOLS/i)).toBeInTheDocument();
+    // No sessions yet message should appear
+    expect(screen.getByText('No sessions yet')).toBeInTheDocument();
   });
 
-  it('logs an error when session creation fails', async () => {
-    // Setup agents mock so the button is not disabled
-    // In App.tsx listAgents().then(res => setAgents(res))
-    vi.mocked(agentsApi.listAgents).mockResolvedValueOnce([
-      { id: 'agent-1', name: 'Test Agent', description: '', created_at: '', updated_at: '' }
-    ]);
+  it('calls createSession with agent and environment when dialog is submitted', async () => {
+    // Setup agents and environments so New Session is enabled
+    vi.mocked(agentsApi.listAgents).mockResolvedValueOnce({
+      data: [{ id: 'agent-1', name: 'Test Agent', description: '', created_at: '', updated_at: '' }],
+    });
+    vi.mocked(agentsApi.listEnvironments).mockResolvedValueOnce({
+      data: [{ id: 'env-1' }],
+    });
 
-    // Setup createSession to fail
-    const mockError = new Error('Network error');
-    const createSessionMock = vi.mocked(agentsApi.createSession).mockRejectedValueOnce(mockError);
+    // Setup createSession to fail (still calls through to the API)
+    const createSessionMock = vi.mocked(agentsApi.createSession).mockRejectedValueOnce(new Error('Network error'));
 
     render(<App />);
 
-    // Wait for the button to become enabled
-    const button = await screen.findByRole('button', { name: /New Session/i });
+    // Wait for one of the "New Session" buttons to become enabled
+    const buttons = await screen.findAllByRole('button', { name: /New Session/i });
+    const button = buttons[0];
     await waitFor(() => {
       expect(button).not.toBeDisabled();
     });
 
-    // Click the button
+    // Click "New Session" — this opens the session creation dialog
     fireEvent.click(button);
 
-    // Verify agentsApi.createSession was called
-    await waitFor(() => {
-      expect(createSessionMock).toHaveBeenCalledWith({ agent: 'agent-1' });
-    });
+    // Find and click the "Create session" submit button inside the dialog
+    const createBtn = await screen.findByRole('button', { name: /Create session/i });
+    fireEvent.click(createBtn);
 
-    // Verify console.error was called by logApiError
+    // Verify agentsApi.createSession was called with correct args
     await waitFor(() => {
-      expect(console.error).toHaveBeenCalledWith('Failed to create session', mockError);
+      expect(createSessionMock).toHaveBeenCalledWith(
+        expect.objectContaining({ agent: 'agent-1', environment_id: 'env-1' }),
+      );
     });
   });
 });

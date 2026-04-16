@@ -116,7 +116,7 @@ describe('POST /mcp/tools/:provider/:tool_name – admin authorization', () => {
   });
 });
 
-describe('GET /mcp/connections – admin authorization', () => {
+describe('GET /mcp/connections – any authenticated user', () => {
   beforeEach(() => {
     vi.mocked(jwtVerify).mockReset();
     mockDb.prepare.mockClear();
@@ -132,17 +132,23 @@ describe('GET /mcp/connections – admin authorization', () => {
       headers: { Authorization: `Bearer ${token}` },
     });
 
-  it('returns 403 when the user has no roles', async () => {
+  it('returns 200 with own connections when the user has no roles', async () => {
     vi.mocked(jwtVerify).mockResolvedValueOnce({
       payload: { sub: 'user-abc' },
     } as any);
 
+    mockDb.prepare.mockReturnValueOnce({
+      bind: vi.fn().mockReturnValue({
+        all: vi.fn().mockResolvedValue({ results: [] }),
+      }),
+    } as any);
+
     const res = await app.fetch(makeGetRequest('token-no-roles'), baseEnv, {} as any);
-    expect(res.status).toBe(403);
-    expect((await res.json() as any).error).toBe('Forbidden: Admin access required');
+    expect(res.status).toBe(200);
+    expect((await res.json() as any).connections).toEqual([]);
   });
 
-  it('returns 200 when the user has the admin role', async () => {
+  it('returns 200 with connections for any authenticated user', async () => {
     vi.mocked(jwtVerify).mockResolvedValueOnce({
       payload: { sub: 'user-abc', groups: ['admin'] },
     } as any);

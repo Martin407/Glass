@@ -10,6 +10,8 @@ vi.mock('../lib/agentsApi', async () => {
     agentsApi: {
       ...actual.agentsApi,
       runSession: vi.fn(),
+      getSession: vi.fn().mockResolvedValue({ id: 'test-session', title: null }),
+      listSessionResources: vi.fn().mockResolvedValue({ resources: [] }),
     }
   };
 });
@@ -53,7 +55,7 @@ describe('ChatWindow', () => {
     render(<ChatWindow sessionId="test-session" onClose={vi.fn()} />);
 
     // Type a message
-    const input = screen.getByPlaceholderText('Type a message...');
+    const input = screen.getByPlaceholderText('Type a message…');
     fireEvent.change(input, { target: { value: 'Hello' } });
 
     // Submit (find the send button by data-slot or form submission)

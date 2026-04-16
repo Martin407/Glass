@@ -90,3 +90,34 @@ CREATE TABLE IF NOT EXISTS environments (
   FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_environments_user_id ON environments(user_id);
+
+-- Temporary state for in-flight MCP OAuth flows (PKCE + dynamic client registration).
+-- Used by all providers (Linear, Slack, Notion, Figma, etc.) that share this flow.
+-- Rows are short-lived (10 min TTL enforced in queries) and cleaned up on successful callback.
+CREATE TABLE IF NOT EXISTS oauth_state (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  client_id TEXT NOT NULL,
+  client_secret TEXT,
+  code_verifier TEXT NOT NULL,
+  token_endpoint TEXT NOT NULL,
+  return_to TEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_state_user_id ON oauth_state(user_id);
+
+-- Credential Vaults Table — tracks Anthropic-side credential vaults per user.
+-- One vault per user (UNIQUE user_id). The `id` is the Anthropic vault ID returned
+-- by POST /v1/credential_vaults.
+CREATE TABLE IF NOT EXISTS credential_vaults (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+  UNIQUE(user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_credential_vaults_user_id ON credential_vaults(user_id);
+
+-- Local auth bypass uses `user-123` (see index.ts). Satisfy FKs on agents/sessions/environments.
+INSERT OR IGNORE INTO users (id, email) VALUES ('user-123', 'glass-dev@localhost');

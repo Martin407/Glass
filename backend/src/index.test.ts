@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { getOktaIssuer, normalizeOktaDomain, normalizeIssuer, parseAnthropicError, handleAnthropicError, archiveUpstreamResource } from './index';
+import { getOktaAudience, getOktaIssuer, normalizeOktaDomain, normalizeIssuer, parseAnthropicError, handleAnthropicError, archiveUpstreamResource } from './index';
 
 describe('Anthropic Error Handling Utilities', () => {
   describe('parseAnthropicError', () => {

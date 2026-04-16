@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
+import type { FormEvent } from 'react';
 import { Calendar, Loader2, Plus, Trash2, Edit2, Play, Pause } from 'lucide-react';
 import { agentsApi } from '../../lib/agentsApi';
 import type { ScheduleConfig, Agent } from '../../types';
@@ -67,19 +68,51 @@ export function AutomationsList({ agents }: AutomationsListProps) {
     setIsDialogOpen(true);
   };
 
-  const handleSave = async (e: React.FormEvent) => {
+  const handleSave = async (e: FormEvent) => {
     e.preventDefault();
     setFormBusy(true);
     setFormError(null);
 
-    let payloadObj: any = null;
+    let payloadObj: unknown = null;
     if (payloadStr.trim()) {
       try {
         payloadObj = JSON.parse(payloadStr);
-      } catch (err) {
+      } catch {
         setFormError('Invalid JSON in payload');
         setFormBusy(false);
         return;
+      }
+    }
+
+    let githubEventsValue: unknown[] | null = null;
+    let githubFiltersValue: Record<string, unknown> | null = null;
+    if (triggerType === 'github') {
+      if (githubEvents.trim()) {
+        try {
+          const parsed = JSON.parse(githubEvents) as unknown;
+          if (!Array.isArray(parsed)) {
+            throw new Error('GitHub events must be a JSON array');
+          }
+          githubEventsValue = parsed;
+        } catch {
+          setFormError('Invalid JSON in GitHub events (expected JSON array)');
+          setFormBusy(false);
+          return;
+        }
+      }
+
+      if (githubFilters.trim()) {
+        try {
+          const parsed = JSON.parse(githubFilters) as unknown;
+          if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+            throw new Error('GitHub filters must be a JSON object');
+          }
+          githubFiltersValue = parsed as Record<string, unknown>;
+        } catch {
+          setFormError('Invalid JSON in GitHub filters (expected JSON object)');
+          setFormBusy(false);
+          return;
+        }
       }
     }
 
@@ -91,8 +124,8 @@ export function AutomationsList({ agents }: AutomationsListProps) {
         cron_expression: triggerType === 'schedule' ? cronExpression : '',
         payload: payloadObj,
         github_repo: triggerType === 'github' ? githubRepo : null,
-        github_events: triggerType === 'github' ? JSON.parse(githubEvents) : null,
-        github_filters: triggerType === 'github' ? JSON.parse(githubFilters) : null,
+        github_events: triggerType === 'github' ? githubEventsValue : null,
+        github_filters: triggerType === 'github' ? githubFiltersValue : null,
       };
 
       if (editingConfig) {
@@ -261,7 +294,7 @@ export function AutomationsList({ agents }: AutomationsListProps) {
                   <select
                     required
                     value={triggerType}
-                    onChange={(e) => setTriggerType(e.target.value as any)}
+                    onChange={(e) => setTriggerType(e.target.value as 'schedule' | 'api' | 'github')}
                     className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                   >
                     <option value="schedule">Schedule (Cron)</option>

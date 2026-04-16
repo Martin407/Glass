@@ -11,6 +11,7 @@ export type Bindings = {
   DB: D1Database
   REALTIME_STATE: DurableObjectNamespace
   ANTHROPIC_API_KEY?: string
+  GITHUB_WEBHOOK_SECRET?: string
   OKTA_CLIENT_ID?: string
   OKTA_CLIENT_SECRET?: string
   OKTA_DOMAIN?: string
@@ -486,6 +487,9 @@ export const archiveUpstreamResource = async (
 // Auth Middleware
 app.use('*', async (c, next) => {
   c.set('cache', globalCache);
+  if (c.req.path === '/webhooks/github' || /^\/v1\/claude_code\/routines\/[^/]+\/fire$/.test(c.req.path)) {
+    return await next();
+  }
   if (c.env.AUTH_BYPASS_FOR_DEV === 'true' || (!c.env.OKTA_DOMAIN && isLocalDevRequest(c.req.url))) {
     c.set('user', { id: 'user-123', roles: ['admin'] });
     return await next();
@@ -552,30 +556,31 @@ export const handleAnthropicError = async (c: AppContext, response: Response) =>
   return c.json({ error: errorMessage }, response.status as any);
 };
 
-const getAnthropicHeaders = (c: AppContext) => {
+const getAnthropicHeadersForUser = (env: Bindings, userId?: string) => {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'anthropic-version': '2023-06-01',
     'anthropic-beta': 'managed-agents-2026-04-01',
   }
-  if (c.env.ANTHROPIC_API_KEY) {
-    headers['X-Api-Key'] = c.env.ANTHROPIC_API_KEY
+  if (env.ANTHROPIC_API_KEY) {
+    headers['X-Api-Key'] = env.ANTHROPIC_API_KEY
   }
-  const user = c.get('user')
-  if (user && user.id) {
-    headers['x-okta-user-id'] = user.id
+  if (userId) {
+    headers['x-okta-user-id'] = userId
   }
   return headers
 }
 
-const fetchAnthropic = async (c: AppContext, endpoint: string, options: RequestInit = {}) => {
+const getAnthropicHeaders = (c: AppContext) => getAnthropicHeadersForUser(c.env, c.get('user')?.id);
+
+const fetchAnthropic = async (c: AppContext, endpoint: string, options: RequestInit = {}, userIdOverride?: string) => {
   if (!c.env.ANTHROPIC_API_KEY) {
     return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 500);
   }
   const response = await fetch(`https://api.anthropic.com/v1${endpoint}`, {
     ...options,
     headers: {
-      ...getAnthropicHeaders(c),
+      ...getAnthropicHeadersForUser(c.env, userIdOverride ?? c.get('user')?.id),
       ...options.headers,
     }
   })
@@ -593,17 +598,132 @@ app.get('/', (c) => {
   return c.text('Multiplayer Managed Agents Platform API')
 })
 
+const bytesToHex = (buffer: ArrayBuffer): string => {
+  const bytes = new Uint8Array(buffer);
+  return Array.from(bytes).map((value) => value.toString(16).padStart(2, '0')).join('');
+};
+
+const timingSafeEqualHex = (a: string, b: string): boolean => {
+  if (a.length !== b.length) return false;
+  let mismatch = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return mismatch === 0;
+};
+
+const verifyGitHubSignature = async (secret: string, payload: string, signatureHeader?: string): Promise<boolean> => {
+  if (!signatureHeader?.startsWith('sha256=')) return false;
+  const signature = signatureHeader.slice('sha256='.length);
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const digest = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(payload));
+  const expected = bytesToHex(digest);
+  return timingSafeEqualHex(signature, expected);
+};
+
+const SUPPORTED_TRIGGER_TYPES = ['schedule', 'api', 'github'] as const;
+type TriggerType = (typeof SUPPORTED_TRIGGER_TYPES)[number];
+
+const parseTriggerType = (value: unknown, fallback: TriggerType = 'schedule'): TriggerType | undefined => {
+  const triggerType = typeof value === 'string' ? value.trim() : '';
+  if (!triggerType) return fallback;
+  if (!SUPPORTED_TRIGGER_TYPES.includes(triggerType as TriggerType)) return undefined;
+  return triggerType as TriggerType;
+};
+
+const parseJsonArray = (value: unknown): unknown[] | null => {
+  if (value === null || value === undefined) return null;
+  if (!Array.isArray(value)) return null;
+  return value;
+};
+
+const isCronFieldMatch = (field: string, value: number, min: number, max: number): boolean => {
+  if (field === '*') return true;
+  const segments = field.split(',');
+  for (const segmentRaw of segments) {
+    const segment = segmentRaw.trim();
+    if (!segment) continue;
+    if (segment.includes('/')) {
+      const [base, stepRaw] = segment.split('/');
+      const step = Number(stepRaw);
+      if (!Number.isInteger(step) || step <= 0) continue;
+      if (base === '*') {
+        if ((value - min) % step === 0) return true;
+        continue;
+      }
+      if (base.includes('-')) {
+        const [startRaw, endRaw] = base.split('-');
+        const start = Number(startRaw);
+        const end = Number(endRaw);
+        if (Number.isInteger(start) && Number.isInteger(end) && value >= start && value <= end && (value - start) % step === 0) {
+          return true;
+        }
+        continue;
+      }
+      const baseValue = Number(base);
+      if (Number.isInteger(baseValue) && baseValue >= min && baseValue <= max && value === baseValue) {
+        return true;
+      }
+      continue;
+    }
+    if (segment.includes('-')) {
+      const [startRaw, endRaw] = segment.split('-');
+      const start = Number(startRaw);
+      const end = Number(endRaw);
+      if (Number.isInteger(start) && Number.isInteger(end) && value >= start && value <= end) return true;
+      continue;
+    }
+    const exact = Number(segment);
+    if (Number.isInteger(exact) && exact >= min && exact <= max && value === exact) return true;
+  }
+  return false;
+};
+
+const isCronDueNow = (cronExpression: string, now: Date): boolean => {
+  const fields = cronExpression.trim().split(/\s+/);
+  if (fields.length !== 5) return false;
+  const [minute, hour, dayOfMonth, month, dayOfWeek] = fields;
+  return isCronFieldMatch(minute, now.getUTCMinutes(), 0, 59)
+    && isCronFieldMatch(hour, now.getUTCHours(), 0, 23)
+    && isCronFieldMatch(dayOfMonth, now.getUTCDate(), 1, 31)
+    && isCronFieldMatch(month, now.getUTCMonth() + 1, 1, 12)
+    && isCronFieldMatch(dayOfWeek, now.getUTCDay(), 0, 6);
+};
+
 
 // ----- Schedule Configs Endpoints -----
 
 // ----- GitHub Webhook Endpoint -----
 app.post('/webhooks/github', async (c) => {
+  const webhookSecret = c.env.GITHUB_WEBHOOK_SECRET;
+  if (!webhookSecret) {
+    console.error('Webhook is misconfigured: GITHUB_WEBHOOK_SECRET is required');
+    return c.json({ error: 'Webhook is misconfigured' }, 500);
+  }
+  const rawBody = await c.req.text();
+  const signature = c.req.header('x-hub-signature-256');
+  const validSignature = await verifyGitHubSignature(webhookSecret, rawBody, signature);
+  if (!validSignature) {
+    return c.json({ error: 'Invalid signature' }, 401);
+  }
+
   const eventName = c.req.header('x-github-event');
   if (!eventName) {
     return c.json({ error: 'Missing x-github-event header' }, 400);
   }
 
-  const payload = await c.req.json().catch(() => ({}));
+  let payload: { repository?: { full_name?: string }; action?: string };
+  try {
+    payload = JSON.parse(rawBody || '{}') as { repository?: { full_name?: string }; action?: string };
+  } catch {
+    return c.json({ error: 'Invalid JSON payload' }, 400);
+  }
   const repoFullName = payload.repository?.full_name;
   if (!repoFullName) {
     return c.json({ success: true, message: 'Ignored: no repository data' });
@@ -648,7 +768,7 @@ Payload: ${payloadObj.message}`;
     };
 
     // In a real app we'd probably use a queue, but we just trigger it directly here
-    const response = await fetchAnthropic(c, '/sessions', { method: 'POST', body: JSON.stringify(sessionPayload) });
+    const response = await fetchAnthropic(c, '/sessions', { method: 'POST', body: JSON.stringify(sessionPayload) }, config.user_id as string);
     if (response.ok) {
       await c.env.DB.prepare('INSERT INTO sessions (id, user_id) VALUES (?, ?)')
         .bind(sessionId, config.user_id)
@@ -665,7 +785,7 @@ app.post('/v1/claude_code/routines/:api_token/fire', async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const text = body.text || '';
 
-  const config = await c.env.DB.prepare('SELECT * FROM schedule_configs WHERE api_token = ? AND is_active = 1').bind(token).first();
+  const config = await c.env.DB.prepare('SELECT * FROM schedule_configs WHERE api_token = ? AND trigger_type = "api" AND is_active = 1').bind(token).first();
   if (!config) {
     return c.json({ error: 'Invalid or inactive token' }, 401);
   }
@@ -689,8 +809,8 @@ Payload: ${payloadObj.message}`;
     message: msg
   };
 
-  const response = await fetchAnthropic(c, '/sessions', { method: 'POST', body: JSON.stringify(payload) });
-  if (!response.ok) return handleAnthropicError(c, response);
+  const response = await fetchAnthropic(c, '/sessions', { method: 'POST', body: JSON.stringify(payload) }, config.user_id as string);
+  if (!response.ok) return response;
 
   await c.env.DB.prepare('INSERT INTO sessions (id, user_id) VALUES (?, ?)')
     .bind(sessionId, config.user_id)
@@ -716,20 +836,39 @@ app.post('/schedule-configs', async (c) => {
   const user = getUser(c);
   const body = await c.req.json().catch(() => ({}));
   const id = crypto.randomUUID();
-  const agent_id = body.agent_id;
+  const agent_id = typeof body.agent_id === 'string' ? body.agent_id.trim() : '';
   const is_active = body.is_active !== undefined ? (body.is_active ? 1 : 0) : 1;
-  const payload = body.payload ? JSON.stringify(body.payload) : null;
-  const trigger_type = body.trigger_type || 'schedule';
+  const payload = body.payload !== undefined ? (body.payload === null ? null : JSON.stringify(body.payload)) : null;
+  const trigger_type = parseTriggerType(body.trigger_type);
 
   if (!agent_id) {
     return c.json({ error: 'agent_id is required' }, 400);
   }
+  if (!trigger_type) {
+    return c.json({ error: 'trigger_type must be one of: schedule, api, github' }, 400);
+  }
+  const ownershipError = await ensureAgentOwnership(c, agent_id);
+  if (ownershipError) {
+    return ownershipError;
+  }
 
-  const cron_expression = body.cron_expression || '';
+  const cron_expression = typeof body.cron_expression === 'string' ? body.cron_expression.trim() : '';
+  if (trigger_type === 'schedule' && !cron_expression) {
+    return c.json({ error: 'cron_expression is required when trigger_type is schedule' }, 400);
+  }
+  const github_repo = typeof body.github_repo === 'string' && body.github_repo.trim() !== '' ? body.github_repo.trim() : null;
+  const github_events_input = parseJsonArray(body.github_events);
+  if (trigger_type === 'github') {
+    if (!github_repo) {
+      return c.json({ error: 'github_repo is required when trigger_type is github' }, 400);
+    }
+    if (!github_events_input || github_events_input.length === 0) {
+      return c.json({ error: 'github_events is required when trigger_type is github' }, 400);
+    }
+  }
   const api_token = trigger_type === 'api' ? crypto.randomUUID() : null;
-  const github_repo = body.github_repo || null;
-  const github_events = body.github_events ? JSON.stringify(body.github_events) : null;
-  const github_filters = body.github_filters ? JSON.stringify(body.github_filters) : null;
+  const github_events = github_events_input ? JSON.stringify(github_events_input) : null;
+  const github_filters = body.github_filters !== undefined ? (body.github_filters === null ? null : JSON.stringify(body.github_filters)) : null;
 
   await c.env.DB.prepare('INSERT INTO schedule_configs (id, user_id, agent_id, cron_expression, is_active, payload, trigger_type, api_token, github_repo, github_events, github_filters) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
     .bind(id, user.id, agent_id, cron_expression, is_active, payload, trigger_type, api_token, github_repo, github_events, github_filters)
@@ -763,21 +902,52 @@ app.post('/schedule-configs/:id', async (c) => {
     return c.json({ error: 'Not found' }, 404);
   }
 
-  const agent_id = body.agent_id || existing.agent_id;
-  const cron_expression = body.cron_expression !== undefined ? body.cron_expression : existing.cron_expression;
+  const agent_id = typeof body.agent_id === 'string' ? body.agent_id.trim() : (existing.agent_id as string);
+  const ownershipError = await ensureAgentOwnership(c, agent_id);
+  if (ownershipError) {
+    return ownershipError;
+  }
+  const cron_expression = body.cron_expression !== undefined
+    ? (typeof body.cron_expression === 'string' ? body.cron_expression.trim() : '')
+    : existing.cron_expression;
   const is_active = body.is_active !== undefined ? (body.is_active ? 1 : 0) : existing.is_active;
-  const payload = body.payload ? JSON.stringify(body.payload) : existing.payload;
-  const trigger_type = body.trigger_type || existing.trigger_type;
+  const payload = body.payload !== undefined ? (body.payload === null ? null : JSON.stringify(body.payload)) : existing.payload;
+  const trigger_type = parseTriggerType(body.trigger_type, existing.trigger_type as TriggerType);
+  if (!trigger_type) {
+    return c.json({ error: 'trigger_type must be one of: schedule, api, github' }, 400);
+  }
+  if (trigger_type === 'schedule' && !cron_expression) {
+    return c.json({ error: 'cron_expression is required when trigger_type is schedule' }, 400);
+  }
 
-  const github_repo = body.github_repo !== undefined ? body.github_repo : existing.github_repo;
-  const github_events = body.github_events ? JSON.stringify(body.github_events) : existing.github_events;
-  const github_filters = body.github_filters ? JSON.stringify(body.github_filters) : existing.github_filters;
+  const github_repo = body.github_repo !== undefined
+    ? (typeof body.github_repo === 'string' ? body.github_repo.trim() : body.github_repo)
+    : existing.github_repo;
+  const github_events = body.github_events !== undefined ? (body.github_events === null ? null : JSON.stringify(body.github_events)) : existing.github_events;
+  const github_filters = body.github_filters !== undefined ? (body.github_filters === null ? null : JSON.stringify(body.github_filters)) : existing.github_filters;
+  if (trigger_type === 'github') {
+    if (!github_repo) {
+      return c.json({ error: 'github_repo is required when trigger_type is github' }, 400);
+    }
+    let parsedEvents: unknown[] | null = null;
+    try {
+      parsedEvents = github_events ? JSON.parse(github_events as string) as unknown[] : null;
+    } catch {
+      parsedEvents = null;
+    }
+    if (!Array.isArray(parsedEvents) || parsedEvents.length === 0) {
+      return c.json({ error: 'github_events is required when trigger_type is github' }, 400);
+    }
+  }
+  const api_token = trigger_type === 'api'
+    ? (body.api_token !== undefined ? body.api_token : (existing.api_token ?? crypto.randomUUID()))
+    : null;
 
-  await c.env.DB.prepare('UPDATE schedule_configs SET agent_id = ?, cron_expression = ?, is_active = ?, payload = ?, trigger_type = ?, github_repo = ?, github_events = ?, github_filters = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?')
-    .bind(agent_id, cron_expression, is_active, payload, trigger_type, github_repo, github_events, github_filters, id, user.id)
+  await c.env.DB.prepare('UPDATE schedule_configs SET agent_id = ?, cron_expression = ?, is_active = ?, payload = ?, trigger_type = ?, api_token = ?, github_repo = ?, github_events = ?, github_filters = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?')
+    .bind(agent_id, cron_expression, is_active, payload, trigger_type, api_token, github_repo, github_events, github_filters, id, user.id)
     .run();
 
-  return c.json({ id, user_id: user.id, agent_id, cron_expression, is_active, payload, trigger_type, github_repo, github_events, github_filters });
+  return c.json({ id, user_id: user.id, agent_id, cron_expression, is_active, payload, trigger_type, api_token, github_repo, github_events, github_filters });
 });
 
 app.delete('/schedule-configs/:id', async (c) => {
@@ -1733,57 +1903,57 @@ export { RealtimeStateObject }
 
 export default {
   fetch: app.fetch,
-    async scheduled(event: ScheduledEvent, env: Bindings, ctx: ExecutionContext) {
+  async scheduled(event: ScheduledEvent, env: Bindings, ctx: ExecutionContext) {
     console.log('Cron trigger executed at', event.cron);
-    // Find all scheduled routines that should run now
-    // We would need to implement full cron parsing here.
-    // For MVP, we'll just query all active scheduled routines and assume they run if their cron matches loosely
-    // Note: A full cron evaluator library would be needed for production
+    if (!env.ANTHROPIC_API_KEY) {
+      console.error('ANTHROPIC_API_KEY not configured');
+      return;
+    }
 
     const db = env.DB;
     const configs = await db.prepare('SELECT * FROM schedule_configs WHERE trigger_type = "schedule" AND is_active = 1').all();
+    const now = new Date(event.scheduledTime);
 
     for (const config of configs.results) {
-        // Trigger it!
-        const sessionId = crypto.randomUUID();
-        let msg = `Scheduled routine triggered at ${event.cron}`;
+      const cronExpression = typeof config.cron_expression === 'string' ? config.cron_expression : '';
+      if (!isCronDueNow(cronExpression, now)) {
+        continue;
+      }
 
-        if (config.payload) {
-          try {
-            const payloadObj = JSON.parse(config.payload as string);
-            if (payloadObj.message) msg += `
-Payload: ${payloadObj.message}`;
-          } catch (e) {}
-        }
+      const sessionId = crypto.randomUUID();
+      let msg = `Scheduled routine triggered at ${event.cron}`;
 
-        const payload = {
-          id: sessionId,
-          agent: config.agent_id,
-          message: msg
-        };
-
+      if (config.payload) {
         try {
-            const headers: Record<string, string> = {
-              'x-api-key': env.ANTHROPIC_API_KEY || '',
-              'Content-Type': 'application/json',
-              'anthropic-version': '2023-06-01',
-              'anthropic-beta': 'agents-2025-02-19'
-            };
-            const response = await fetch('https://api.anthropic.com/v1/sessions', {
-              method: 'POST',
-              headers,
-              body: JSON.stringify(payload)
-            });
+          const payloadObj = JSON.parse(config.payload as string);
+          if (payloadObj.message) msg += `
+Payload: ${payloadObj.message}`;
+        } catch (e) {}
+      }
 
-            if (response.ok) {
-               await db.prepare('INSERT INTO sessions (id, user_id) VALUES (?, ?)')
-                .bind(sessionId, config.user_id)
-                .run();
-               console.log(`Triggered session ${sessionId} for config ${config.id}`);
-            }
-        } catch (e) {
-            console.error('Error triggering scheduled routine:', e);
+      const payload = {
+        id: sessionId,
+        agent: config.agent_id,
+        message: msg
+      };
+
+      try {
+        const headers = getAnthropicHeadersForUser(env, config.user_id as string);
+        const response = await fetch('https://api.anthropic.com/v1/sessions', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(payload)
+        });
+
+        if (response.ok) {
+          await db.prepare('INSERT INTO sessions (id, user_id) VALUES (?, ?)')
+            .bind(sessionId, config.user_id)
+            .run();
+          console.log(`Triggered session ${sessionId} for config ${config.id}`);
         }
+      } catch (e) {
+        console.error('Error triggering scheduled routine:', e);
+      }
     }
   }
 }

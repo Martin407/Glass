@@ -5,6 +5,7 @@
     "dev": "npm run dev --prefix backend & npm run dev --prefix frontend & wait",
     "dev:backend": "npm run dev --prefix backend",
     "dev:frontend": "npm run dev --prefix frontend",
-    "test": "npm run test --prefix backend && npm run test --prefix frontend"
+    "test": "npm run test --prefix backend && npm run test --prefix frontend",
+    "rebuild:bins": "npm rebuild --prefix frontend vite && npm rebuild --prefix backend wrangler"
   }
 }

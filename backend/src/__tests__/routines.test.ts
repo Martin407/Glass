@@ -63,6 +63,42 @@ describe('Routine trigger endpoints', () => {
     );
   });
 
+  it('correctly parses JSON fields in schedule-configs fetch endpoints', async () => {
+    const rawConfig = {
+      id: 'cfg-1',
+      user_id: 'user-1',
+      agent_id: 'agent-1',
+      trigger_type: 'github',
+      github_repo: 'owner/repo',
+      github_events: JSON.stringify(['push', 'pull_request.opened']),
+      github_filters: JSON.stringify({ branch: 'main' }),
+      is_active: 1
+    };
+
+    const db = createDb({
+      all: () => ({ results: [rawConfig] }),
+      first: () => rawConfig
+    });
+
+    const listRes = await app.fetch(
+      new Request('http://localhost/schedule-configs'),
+      { DB: db, AUTH_BYPASS_FOR_DEV: 'true' } as any
+    );
+
+    const listData = await listRes.json() as any;
+    expect(listData.data[0].github_events).toEqual(['push', 'pull_request.opened']);
+    expect(listData.data[0].github_filters).toEqual({ branch: 'main' });
+
+    const getRes = await app.fetch(
+      new Request('http://localhost/schedule-configs/cfg-1'),
+      { DB: db, AUTH_BYPASS_FOR_DEV: 'true' } as any
+    );
+
+    const getData = await getRes.json() as any;
+    expect(getData.github_events).toEqual(['push', 'pull_request.opened']);
+    expect(getData.github_filters).toEqual({ branch: 'main' });
+  });
+
   it('rejects GitHub webhook requests with missing or invalid signature', async () => {
     const db = createDb({});
 

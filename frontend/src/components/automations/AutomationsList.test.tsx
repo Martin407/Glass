@@ -40,9 +40,19 @@ describe('AutomationsList', () => {
     fireEvent.change(screen.getByPlaceholderText('{"message": "Check for new PRs"}'), { target: { value: '' } });
     fireEvent.change(screen.getAllByRole('combobox')[1], { target: { value: 'github' } });
     fireEvent.change(screen.getByPlaceholderText('owner/repo'), { target: { value: 'owner/repo' } });
-    fireEvent.change(screen.getByPlaceholderText('["pull_request.opened"]'), { target: { value: '{' } });
-
+    
+    // Select some events
+    const pushCheckbox = screen.getByLabelText(/push/i);
+    fireEvent.click(pushCheckbox);
+    
     fireEvent.click(screen.getByRole('button', { name: /create routine/i }));
-    expect(await screen.findByText(/invalid json in github events/i)).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(agentsApi.createScheduleConfig).toHaveBeenCalledWith(expect.objectContaining({
+        trigger_type: 'github',
+        github_repo: 'owner/repo',
+        github_events: ['push']
+      }));
+    });
   });
 });

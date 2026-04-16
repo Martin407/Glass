@@ -31,6 +31,11 @@ CREATE TABLE IF NOT EXISTS schedule_configs (
   cron_expression TEXT NOT NULL,
   is_active INTEGER DEFAULT 1,
   payload TEXT,
+  trigger_type TEXT DEFAULT 'schedule',
+  api_token TEXT,
+  github_repo TEXT,
+  github_events TEXT,
+  github_filters TEXT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -41,6 +46,8 @@ CREATE INDEX IF NOT EXISTS idx_users_scim_id ON users(scim_id);
 CREATE INDEX IF NOT EXISTS idx_oauth_tokens_user_id ON oauth_tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_schedule_configs_user_id ON schedule_configs(user_id);
 CREATE INDEX IF NOT EXISTS idx_schedule_configs_active ON schedule_configs(is_active);
+CREATE UNIQUE INDEX IF NOT EXISTS schedule_configs_api_token_idx ON schedule_configs (api_token);
+CREATE INDEX IF NOT EXISTS schedule_configs_github_lookup_idx ON schedule_configs (trigger_type, github_repo, is_active);
 
 -- Global Tool Permissions Table
 CREATE TABLE IF NOT EXISTS global_tool_permissions (

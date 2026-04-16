@@ -765,7 +765,6 @@ app.post('/webhooks/github', async (c) => {
 
   for (const config of matchingConfigs) {
     // Start session for matching routine
-    const sessionId = crypto.randomUUID();
     let msg = `GitHub event triggered: ${eventName}`;
     if (payload.action) msg += `.${payload.action}`;
 
@@ -778,14 +777,21 @@ Payload: ${payloadObj.message}`;
     }
 
     const sessionPayload = {
-      id: sessionId,
       agent: config.agent_id,
       message: msg
     };
 
     // In a real app we'd probably use a queue, but we just trigger it directly here
-    const response = await fetchAnthropic(c, '/sessions', { method: 'POST', body: JSON.stringify(sessionPayload) }, config.user_id as string);
+    const headers = getAnthropicHeadersForUser(c.env, config.user_id as string);
+    const response = await fetch('https://api.anthropic.com/v1/sessions', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(sessionPayload)
+    });
+
     if (response.ok) {
+      const data: any = await response.json();
+      const sessionId = data.id;
       await c.env.DB.prepare('INSERT INTO sessions (id, user_id) VALUES (?, ?)')
         .bind(sessionId, config.user_id)
         .run();
@@ -806,7 +812,6 @@ app.post('/v1/claude_code/routines/:api_token/fire', async (c) => {
     return c.json({ error: 'Invalid or inactive token' }, 401);
   }
 
-  const sessionId = crypto.randomUUID();
   let msg = 'API trigger fired.';
   if (text) {
     msg += ` Additional context: ${text}`;
@@ -820,13 +825,23 @@ Payload: ${payloadObj.message}`;
   }
 
   const payload = {
-    id: sessionId,
     agent: config.agent_id,
     message: msg
   };
 
-  const response = await fetchAnthropic(c, '/sessions', { method: 'POST', body: JSON.stringify(payload) }, config.user_id as string);
-  if (!response.ok) return response;
+  const headers = getAnthropicHeadersForUser(c.env, config.user_id as string);
+  const response = await fetch('https://api.anthropic.com/v1/sessions', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    return handleAnthropicError(c, response);
+  }
+
+  const data: any = await response.json();
+  const sessionId = data.id;
 
   await c.env.DB.prepare('INSERT INTO sessions (id, user_id) VALUES (?, ?)')
     .bind(sessionId, config.user_id)
@@ -840,12 +855,33 @@ Payload: ${payloadObj.message}`;
 });
 
 
+const formatScheduleConfig = (config: any) => {
+  if (!config) return config;
+  const result = { ...config };
+  if (typeof result.github_events === 'string') {
+    try {
+      result.github_events = JSON.parse(result.github_events);
+    } catch (e) {
+      result.github_events = [];
+    }
+  }
+  if (typeof result.github_filters === 'string') {
+    try {
+      result.github_filters = JSON.parse(result.github_filters);
+    } catch (e) {
+      result.github_filters = {};
+    }
+  }
+  return result;
+};
+
+
 app.get('/schedule-configs', async (c) => {
   const user = getUser(c);
   const result = await c.env.DB.prepare('SELECT * FROM schedule_configs WHERE user_id = ? ORDER BY created_at DESC')
     .bind(user.id)
     .all();
-  return c.json({ data: result.results });
+  return c.json({ data: result.results.map(formatScheduleConfig) });
 });
 
 app.post('/schedule-configs', async (c) => {
@@ -890,7 +926,7 @@ app.post('/schedule-configs', async (c) => {
     .bind(id, user.id, agent_id, cron_expression, is_active, payload, trigger_type, api_token, github_repo, github_events, github_filters)
     .run();
 
-  return c.json({ id, user_id: user.id, agent_id, cron_expression, is_active, payload, trigger_type, api_token, github_repo, github_events, github_filters });
+  return c.json(formatScheduleConfig({ id, user_id: user.id, agent_id, cron_expression, is_active, payload, trigger_type, api_token, github_repo, github_events, github_filters }));
 });
 
 app.get('/schedule-configs/:id', async (c) => {
@@ -902,7 +938,7 @@ app.get('/schedule-configs/:id', async (c) => {
   if (!result) {
     return c.json({ error: 'Not found' }, 404);
   }
-  return c.json(result);
+  return c.json(formatScheduleConfig(result));
 });
 
 app.post('/schedule-configs/:id', async (c) => {
@@ -963,7 +999,7 @@ app.post('/schedule-configs/:id', async (c) => {
     .bind(agent_id, cron_expression, is_active, payload, trigger_type, api_token, github_repo, github_events, github_filters, id, user.id)
     .run();
 
-  return c.json({ id, user_id: user.id, agent_id, cron_expression, is_active, payload, trigger_type, api_token, github_repo, github_events, github_filters });
+  return c.json(formatScheduleConfig({ id, user_id: user.id, agent_id, cron_expression, is_active, payload, trigger_type, api_token, github_repo, github_events, github_filters }));
 });
 
 app.delete('/schedule-configs/:id', async (c) => {
@@ -1111,6 +1147,7 @@ const resolveManagedAgentIdForSession = (body: Record<string, unknown>): string 
 const buildAnthropicSessionCreateBody = (body: Record<string, unknown>): Record<string, unknown> => {
   const out = { ...body };
   delete out.agent_id;
+  delete out.id;
   if (typeof body.agent_id === 'string' && body.agent === undefined) {
     out.agent = body.agent_id;
   }
@@ -1936,7 +1973,6 @@ export default {
         continue;
       }
 
-      const sessionId = crypto.randomUUID();
       let msg = `Scheduled routine triggered at ${event.cron}`;
 
       if (config.payload) {
@@ -1950,7 +1986,6 @@ Payload: ${payloadObj.message}`;
       }
 
       const payload = {
-        id: sessionId,
         agent: config.agent_id,
         message: msg
       };
@@ -1964,6 +1999,8 @@ Payload: ${payloadObj.message}`;
         });
 
         if (response.ok) {
+          const data: any = await response.json();
+          const sessionId = data.id;
           await db.prepare('INSERT INTO sessions (id, user_id) VALUES (?, ?)')
             .bind(sessionId, config.user_id)
             .run();

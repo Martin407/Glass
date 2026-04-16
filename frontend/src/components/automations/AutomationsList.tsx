@@ -7,6 +7,14 @@ interface AutomationsListProps {
   agents: Agent[];
 }
 
+const COMMON_GITHUB_EVENTS = [
+  { id: 'push', label: 'Push' },
+  { id: 'pull_request.opened', label: 'PR Opened' },
+  { id: 'pull_request.synchronize', label: 'PR Synchronized' },
+  { id: 'issues.opened', label: 'Issue Opened' },
+  { id: 'issue_comment.created', label: 'Issue Comment' },
+];
+
 export function AutomationsList({ agents }: AutomationsListProps) {
   const [configs, setConfigs] = useState<ScheduleConfig[]>([]);
   const [loading, setLoading] = useState(true);
@@ -18,7 +26,7 @@ export function AutomationsList({ agents }: AutomationsListProps) {
   const [cronExpression, setCronExpression] = useState('0 * * * *');
   const [triggerType, setTriggerType] = useState<'schedule'|'api'|'github'>('schedule');
   const [githubRepo, setGithubRepo] = useState('');
-  const [githubEvents, setGithubEvents] = useState('[]');
+  const [githubEvents, setGithubEvents] = useState<string[]>([]);
   const [githubFilters, setGithubFilters] = useState('{}');
   const [payloadStr, setPayloadStr] = useState('');
   const [formBusy, setFormBusy] = useState(false);
@@ -47,7 +55,7 @@ export function AutomationsList({ agents }: AutomationsListProps) {
     setCronExpression('0 * * * *');
     setTriggerType('schedule');
     setGithubRepo('');
-    setGithubEvents('[]');
+    setGithubEvents([]);
     setGithubFilters('{}');
     setPayloadStr('');
     setFormError(null);
@@ -60,7 +68,7 @@ export function AutomationsList({ agents }: AutomationsListProps) {
     setCronExpression(config.cron_expression);
     setTriggerType(config.trigger_type || 'schedule');
     setGithubRepo(config.github_repo || '');
-    setGithubEvents(config.github_events ? JSON.stringify(config.github_events) : '[]');
+    setGithubEvents(config.github_events || []);
     setGithubFilters(config.github_filters ? JSON.stringify(config.github_filters) : '{}');
     setPayloadStr(config.payload || '');
     setFormError(null);
@@ -83,22 +91,10 @@ export function AutomationsList({ agents }: AutomationsListProps) {
       }
     }
 
-    let githubEventsValue: unknown[] | null = null;
+    let githubEventsValue: string[] | null = null;
     let githubFiltersValue: Record<string, unknown> | null = null;
     if (triggerType === 'github') {
-      if (githubEvents.trim()) {
-        try {
-          const parsed = JSON.parse(githubEvents) as unknown;
-          if (!Array.isArray(parsed)) {
-            throw new Error('GitHub events must be a JSON array');
-          }
-          githubEventsValue = parsed;
-        } catch {
-          setFormError('Invalid JSON in GitHub events (expected JSON array)');
-          setFormBusy(false);
-          return;
-        }
-      }
+      githubEventsValue = githubEvents;
 
       if (githubFilters.trim()) {
         try {
@@ -212,8 +208,15 @@ export function AutomationsList({ agents }: AutomationsListProps) {
                       <div className="font-medium text-gray-900 flex items-center gap-2">
                         {getAgentName(config.agent_id)}
                         <span className="font-mono text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-md">
-                          {config.trigger_type === 'schedule' ? config.cron_expression : config.trigger_type}
+                          {config.trigger_type === 'schedule' ? config.cron_expression : 
+                           config.trigger_type === 'github' ? `${config.github_repo || 'github'}` :
+                           config.trigger_type}
                         </span>
+                        {config.trigger_type === 'github' && config.github_events && config.github_events.length > 0 && (
+                          <span className="text-[10px] bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded border border-blue-100 uppercase tracking-wider font-semibold">
+                            {config.github_events.length} event{config.github_events.length === 1 ? '' : 's'}
+                          </span>
+                        )}
                         {!config.is_active && (
                           <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded-md">Paused</span>
                         )}
@@ -351,14 +354,26 @@ export function AutomationsList({ agents }: AutomationsListProps) {
                       />
                     </div>
                     <div className="space-y-1.5">
-                      <label className="text-sm font-medium text-gray-700">GitHub Events (JSON array)</label>
-                      <input
-                        type="text"
-                        value={githubEvents}
-                        onChange={(e) => setGithubEvents(e.target.value)}
-                        placeholder='["pull_request.opened"]'
-                        className="w-full font-mono rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                      />
+                      <label className="text-sm font-medium text-gray-700">GitHub Events</label>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-1">
+                        {COMMON_GITHUB_EVENTS.map(event => (
+                          <label key={event.id} className="flex items-center gap-2 p-2 rounded-md border border-gray-200 hover:bg-gray-50 cursor-pointer transition-colors">
+                            <input
+                              type="checkbox"
+                              checked={githubEvents.includes(event.id)}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setGithubEvents([...githubEvents, event.id]);
+                                } else {
+                                  setGithubEvents(githubEvents.filter(id => id !== event.id));
+                                }
+                              }}
+                              className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 h-4 w-4"
+                            />
+                            <span className="text-sm text-gray-700">{event.label}</span>
+                          </label>
+                        ))}
+                      </div>
                     </div>
                   </>
                 )}
